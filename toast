@@ -18,7 +18,7 @@ import shlex
 from dotenv import load_dotenv
 
 # Load environment variables
-load_dotenv()
+load_dotenv("/Users/billy/Dropbox/Projects/pixl-toastr/src/.env") # Load .env from absolute project directory path, to ensure script is executable from any directory
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # ---------------------------------------------------------------------
