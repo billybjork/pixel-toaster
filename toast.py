@@ -14,6 +14,7 @@ import logging
 import argparse
 import re
 import time
+import shlex
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -33,7 +34,7 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".aac", ".flac"}
 
-# System prompt: Note the explicit instruction to return only raw JSON (no markdown).
+# System prompt for the LLM (return only raw JSON without markdown)
 SYSTEM_PROMPT = """\
 You are an FFmpeg command generator. 
 Return your result strictly as a JSON object with exactly the following schema, and do not include any markdown formatting or additional text:
@@ -74,20 +75,18 @@ def clean_json_response(response_str):
 
 def fix_command_quotes(command):
     """
-    Fix quoting issues in the generated FFmpeg command.
+    Fix common quoting issues in the generated FFmpeg command.
     
     This function:
-      1. Looks for a -vf argument and extracts its filter string.
-      2. In the filter chain, finds scale filters written as scale=min(400,iw)
+      1. Looks for a scale filter written as: scale=min(400,iw)
          and wraps the min() expression in single quotes to produce:
          scale='min(400,iw)'
-      3. Then, ensures the entire -vf filter string is wrapped in double quotes.
+      2. Ensures the entire -vf argument is enclosed in double quotes.
     """
     pattern = r'(-vf\s+)(["\'])(.*?)\2'
     match = re.search(pattern, command)
     if match:
         prefix = match.group(1)
-        orig_quote = match.group(2)
         filters = match.group(3)
         # Fix the scale filter: wrap min(...) in single quotes if not already
         filters_fixed = re.sub(
@@ -102,10 +101,36 @@ def fix_command_quotes(command):
         command = re.sub(pattern, new_vf, command, count=1)
     return command
 
+def update_output_filename(command, input_file):
+    """
+    Update the output filename in the FFmpeg command to always include the input filename.
+    It takes the basename of the input file, appends "_toasted", and uses the output file's extension.
+    
+    For example, if the input file is "my-image.png" and the command originally ends with "output.png",
+    the output file will be changed to "my-image_toasted.png".
+    """
+    try:
+        tokens = shlex.split(command)
+    except Exception:
+        tokens = command.split()
+    if len(tokens) < 3:
+        return command  # Not enough tokens to have an output file.
+    # Assume the output file is the last token.
+    output_token = tokens[-1]
+    base, _ = os.path.splitext(os.path.basename(input_file))
+    _, out_ext = os.path.splitext(output_token)
+    new_output = f"{base}_toasted{out_ext}"
+    tokens[-1] = new_output
+    try:
+        new_command = shlex.join(tokens)
+    except AttributeError:
+        new_command = ' '.join(shlex.quote(token) for token in tokens)
+    return new_command
+
 def extract_explicit_filename(user_query):
     """
     Return a filename if a token in the user query looks like a file name with a known extension.
-    This avoids mistakenly capturing numbers (e.g. "12.5").
+    Avoid mistaking numbers (like "12.5") for filenames.
     """
     pattern = r'\b(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]+\.(?:mp4|mov|mkv|avi|webm|png|jpg|jpeg|bmp|tiff|gif)\b'
     matches = re.findall(pattern, user_query, re.IGNORECASE)
@@ -160,7 +185,8 @@ def analyze_prompt_for_filetype(user_query):
 
 def replace_placeholder_with_file(command, actual_file):
     """
-    Replace any generic placeholder filename (like 'input.mp4') with the actual filename.
+    If the command contains a generic placeholder filename (like 'input.mp4')
+    and does not already include the actual file name, replace it.
     """
     if actual_file not in command:
         pattern = r"input\.[a-z0-9]+"
@@ -202,6 +228,29 @@ def run_ffmpeg_command(command):
     except Exception as e:
         return False, str(e)
 
+def print_art():
+    """
+    Print the celebratory art to the terminal.
+    """
+    art = r"""
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣄⠀⠀⠀⢀⡀⠀⠀⠀⣀⡀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢰⣟⠁⠀⠀⣴⡏⠁⠀⠀⣾⡋⠁⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠿⠄⠀⠈⠻⠷⠀⠀⠈⢹⣷⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣤⣤⣤⣤⣤⣤⣤⣤⣤⣀⠀⠠⣤⣀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⣹⣿⡿⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠛⠛⠀⠛⠛⠛⠛⠉⠛⠛⠛⠀⠐⠛⠛⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⣠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣦⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀
+⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀
+⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠛⠿⣿⡇⠀⠀
+⠀⠀⠀⠀⠀⠀⠸⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠏⢠⣾⣿⣦⠘⠇⠀⠀
+⠀⠀⢀⣤⡀⠀⢰⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣆⠘⢿⣿⠟⢠⡆⠀⠀
+⠀⠀⠘⠛⠛⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣤⣤⣶⣿⡇⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⢠⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣄⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠘⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠛⠀⠀⠀⠀
+"""
+    print(art)
+
 def main():
     parser = argparse.ArgumentParser(
         description="pixl-toastr: Natural language FFmpeg command generator."
@@ -220,7 +269,6 @@ def main():
     logging.info(f"Interpreting your request: {user_query}")
 
     detected_file = None
-    # Use the explicit file flag if provided
     if args.file:
         logging.info(f"Using explicit file: {args.file}")
         detected_file = args.file
@@ -275,9 +323,11 @@ def main():
             ffmpeg_command = replace_placeholder_with_file(ffmpeg_command, detected_file)
         
         ffmpeg_command = fix_command_quotes(ffmpeg_command)
+        if detected_file:
+            ffmpeg_command = update_output_filename(ffmpeg_command, detected_file)
+        
         logging.info(f"Proposed command: {ffmpeg_command}")
 
-        # Optional user confirmation before executing
         if args.confirm:
             confirm = input("Execute this command? (y/N): ").strip().lower()
             if confirm != "y":
@@ -292,6 +342,8 @@ def main():
         if success:
             logging.info("Command executed successfully!")
             logging.debug(f"Command output: {output}")
+            # Print the art after a successful execution.
+            print_art()
             sys.exit(0)
         else:
             logging.error("Command failed. Error message:")
