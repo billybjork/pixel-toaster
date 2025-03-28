@@ -18,7 +18,7 @@ import shlex
 from dotenv import load_dotenv
 
 # Load environment variables
-load_dotenv("/Users/billy/Dropbox/Projects/pixl-toastr/src/.env") # Load .env from absolute project directory path, to ensure script is executable from any directory
+load_dotenv("/Users/billy/Dropbox/Projects/pixl-toastr/src/.env")  # Load .env from absolute project directory path, to ensure script is executable from any directory
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # ---------------------------------------------------------------------
@@ -103,11 +103,9 @@ def fix_command_quotes(command):
 
 def update_output_filename(command, input_file):
     """
-    Update the output filename in the FFmpeg command to always include the input filename.
-    It takes the basename of the input file, appends "_toasted", and uses the output file's extension.
-    
-    For example, if the input file is "my-image.png" and the command originally ends with "output.png",
-    the output file will be changed to "my-image_toasted.png".
+    Update the output filename in the FFmpeg command.
+    If input_file is a string, update the output filename to be <basename>_toasted<ext>.
+    If input_file is a list, update the output filename to be "combined_toasted<ext>".
     """
     try:
         tokens = shlex.split(command)
@@ -117,9 +115,12 @@ def update_output_filename(command, input_file):
         return command  # Not enough tokens to have an output file.
     # Assume the output file is the last token.
     output_token = tokens[-1]
-    base, _ = os.path.splitext(os.path.basename(input_file))
     _, out_ext = os.path.splitext(output_token)
-    new_output = f"{base}_toasted{out_ext}"
+    if isinstance(input_file, str):
+        base, _ = os.path.splitext(os.path.basename(input_file))
+        new_output = f"{base}_toasted{out_ext}"
+    else:
+        new_output = f"combined_toasted{out_ext}"
     tokens[-1] = new_output
     try:
         new_command = shlex.join(tokens)
@@ -269,6 +270,7 @@ def main():
     logging.info(f"Interpreting your request: {user_query}")
 
     detected_file = None
+    # Handle explicit file parameter
     if args.file:
         logging.info(f"Using explicit file: {args.file}")
         detected_file = args.file
@@ -289,8 +291,9 @@ def main():
                 if files:
                     logging.info(f"Found multiple files: {', '.join(files)}")
                     file_list = ", ".join(files)
-                    user_query += f"\n(Found these files in the directory: {file_list}. Please choose the correct one as input.)"
-    
+                    user_query += f"\n(Found these files in the directory: {file_list}. Please use all of them as inputs.)"
+                    detected_file = files
+
     attempt = 0
     error_message = None
 
@@ -319,8 +322,13 @@ def main():
             time.sleep(2 ** attempt)
             continue
 
+        # For single file, try to replace generic placeholder with the actual filename.
         if detected_file:
-            ffmpeg_command = replace_placeholder_with_file(ffmpeg_command, detected_file)
+            if isinstance(detected_file, str):
+                ffmpeg_command = replace_placeholder_with_file(ffmpeg_command, detected_file)
+            else:
+                # For multiple files, assume the LLM used the file names provided in the prompt.
+                pass
         
         ffmpeg_command = fix_command_quotes(ffmpeg_command)
         if detected_file:
