@@ -113,7 +113,6 @@ def update_output_filename(command, input_file):
         tokens = command.split()
     if len(tokens) < 3:
         return command  # Not enough tokens to have an output file.
-    # Assume the output file is the last token.
     output_token = tokens[-1]
     _, out_ext = os.path.splitext(output_token)
     if isinstance(input_file, str):
@@ -188,10 +187,41 @@ def replace_placeholder_with_file(command, actual_file):
     """
     If the command contains a generic placeholder filename (like 'input.mp4')
     and does not already include the actual file name, replace it.
+    Uses shlex.quote to ensure proper shell quoting.
     """
     if actual_file not in command:
         pattern = r"input\.[a-z0-9]+"
-        command = re.sub(pattern, actual_file, command, flags=re.IGNORECASE)
+        command = re.sub(pattern, shlex.quote(actual_file), command, flags=re.IGNORECASE)
+    return command
+
+def maybe_use_file_list(user_query, command, file_list):
+    """
+    If multiple files are detected and the query suggests stitching/concatenation,
+    automatically create a file list and modify the command to use the concat demuxer.
+    """
+    lower_query = user_query.lower()
+    if isinstance(file_list, list) and ("stitch" in lower_query or "concat" in lower_query):
+        filelist_filename = "filelist.txt"
+        try:
+            with open(filelist_filename, "w") as f:
+                for filename in file_list:
+                    # Ensure each filename is safely quoted inside the file list
+                    f.write(f"file {shlex.quote(filename)}\n")
+            logging.info(f"Created temporary file list: {filelist_filename}")
+        except Exception as e:
+            logging.error(f"Error creating file list: {e}")
+            return command
+        # Extract output file from the original command (last token)
+        try:
+            tokens = shlex.split(command)
+        except Exception:
+            tokens = command.split()
+        if len(tokens) < 2:
+            return command
+        output_token = tokens[-1]
+        # Construct new command using the concat demuxer
+        new_command = f"ffmpeg -f concat -safe 0 -i {shlex.quote(filelist_filename)} -c copy {shlex.quote(output_token)}"
+        return new_command
     return command
 
 def generate_ffmpeg_command(user_query, error_message=None):
@@ -243,9 +273,9 @@ def print_art():
 ⠀⠀⠀⠀⠀⠀⠀⣠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣦⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀
 ⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀
-⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠛⠿⣿⡇⠀⠀
-⠀⠀⠀⠀⠀⠀⠸⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠏⢠⣾⣿⣦⠘⠇⠀⠀
-⠀⠀⢀⣤⡀⠀⢰⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣆⠘⢿⣿⠟⢠⡆⠀⠀
+⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠛⠿⣿⡇⠀⠀
+⠀⠀⠀⠀⠀⠀⠸⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠏⢠⣾⣿⣦⠘⠇⠀⠀
+⠀⠀⢀⣤⡀⠀⢰⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣆⠘⢿⣿⠟⢠⡆⠀⠀
 ⠀⠀⠘⠛⠛⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣤⣤⣶⣿⡇⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⢠⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣄⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠘⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠛⠀⠀⠀⠀
@@ -274,7 +304,7 @@ def main():
     if args.file:
         logging.info(f"Using explicit file: {args.file}")
         detected_file = args.file
-        user_query += f"\n(Use the file '{detected_file}' as input.)"
+        user_query += f"\n(Use the file '{args.file}' as input.)"
     else:
         ext_set, explicit_file = analyze_prompt_for_filetype(user_query)
         if explicit_file:
@@ -290,8 +320,8 @@ def main():
                 files = list_files_in_dir(".", ext_set)
                 if files:
                     logging.info(f"Found multiple files: {', '.join(files)}")
-                    file_list = ", ".join(files)
-                    user_query += f"\n(Found these files in the directory: {file_list}. Please use all of them as inputs.)"
+                    file_list_str = ", ".join(files)
+                    user_query += f"\n(Found these files in the directory: {file_list_str}. Please use all of them as inputs.)"
                     detected_file = files
 
     attempt = 0
@@ -333,6 +363,10 @@ def main():
         ffmpeg_command = fix_command_quotes(ffmpeg_command)
         if detected_file:
             ffmpeg_command = update_output_filename(ffmpeg_command, detected_file)
+        
+        # If multiple files are detected and the query suggests stitching, use a file list.
+        if isinstance(detected_file, list):
+            ffmpeg_command = maybe_use_file_list(user_query, ffmpeg_command, detected_file)
         
         logging.info(f"Proposed command: {ffmpeg_command}")
 
