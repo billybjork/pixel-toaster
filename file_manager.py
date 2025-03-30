@@ -21,6 +21,34 @@ class FileManager:
         matches = re.findall(pattern, user_query, re.IGNORECASE)
         return matches[0] if matches else None
 
+    def fuzzy_match_filename(self, user_query: str, ext_set: set = None) -> Optional[str]:
+        """
+        Try to fuzzy-match a file from the query.
+        It extracts tokens (with at least 8 characters) from the query and checks if any file's base name
+        (ignoring extension) contains one of those tokens.
+        """
+        tokens = re.findall(r'\b[\w-]{8,}\b', user_query)
+        logging.debug(f"Fuzzy matching tokens: {tokens}")
+        candidate_files = []
+        if ext_set is None:
+            ext_set = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS | AUDIO_EXTENSIONS
+        for f in os.listdir(self.directory):
+            full_path = os.path.join(self.directory, f)
+            if os.path.isfile(full_path):
+                base, ext = os.path.splitext(f)
+                if ext.lower() in ext_set:
+                    for token in tokens:
+                        if token.lower() in base.lower():
+                            candidate_files.append(f)
+                            break
+        if len(candidate_files) == 1:
+            return candidate_files[0]
+        elif len(candidate_files) > 1:
+            logging.info("Multiple fuzzy matches found: " + ", ".join(candidate_files))
+            # For now, return the first one; later you might want to ask the user to disambiguate.
+            return candidate_files[0]
+        return None
+
     def list_files(self, exts: set) -> List[str]:
         """
         List files in the directory that match any of the extensions.
@@ -46,9 +74,6 @@ class FileManager:
     ) -> Tuple[Optional[set], Optional[Union[str, List[str]]]]:
         """
         Return a tuple: (set_of_extensions, explicit_filename_or_none).
-        
-        The function now looks for explicit phrases like "png file" or "jpg file"
-        to narrow down the source file type.
         """
         explicit = self.extract_explicit_filename(user_query)
         if explicit:

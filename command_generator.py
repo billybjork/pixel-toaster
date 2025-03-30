@@ -2,14 +2,13 @@ import json
 import re
 import shlex
 import logging
-import time
 import openai
-import os
 from dotenv import load_dotenv
+from compression_utils import extract_target_file_size, needs_compression
 
 class CommandGenerator:
     SYSTEM_PROMPT = """\
-You are an FFmpeg command generator. 
+You are an FFmpeg command generator.
 Return your result strictly as a JSON object with exactly the following schema, and do not include any markdown formatting or additional text:
 
 {"command": "the ffmpeg command"}
@@ -22,17 +21,13 @@ GENERAL RULES:
 5. Always start the command with 'ffmpeg'.
 6. Do not include any explanation or markdown formatting; return only raw JSON.
 """
-
+    
     def __init__(self, max_retries: int = 3, temperature: float = 0.0):
-        # Ensure the environment variables (like OPENAI_API_KEY) are loaded.
         load_dotenv()
         self.max_retries = max_retries
         self.temperature = temperature
 
     def clean_json_response(self, response_str: str) -> str:
-        """
-        Remove markdown and extract JSON object.
-        """
         response_str = response_str.strip()
         if response_str.startswith("```") and response_str.endswith("```"):
             lines = response_str.splitlines()
@@ -49,9 +44,15 @@ GENERAL RULES:
         return response_str
 
     def generate_command(self, user_query: str, error_message: str = None) -> str:
-        """
-        Call the OpenAI API and return the raw response.
-        """
+        # Check if the query has a file size constraint or general compression request.
+        target_size = extract_target_file_size(user_query)
+        if target_size:
+            # Append instruction with the exact target size in bytes.
+            user_query += f"\nEnsure the output file is no larger than {target_size} bytes."
+        elif needs_compression(user_query):
+            # Otherwise, simply require the output to be compressed.
+            user_query += "\nEnsure that the output file is compressed (i.e., smaller than the input file)."
+
         if error_message:
             user_query += f"\nThe previous command failed with this error:\n{error_message}\nTry another approach."
         response = openai.chat.completions.create(
@@ -65,9 +66,6 @@ GENERAL RULES:
         return response.choices[0].message.content
 
     def fix_command_quotes(self, command: str) -> str:
-        """
-        Adjust common quoting issues (e.g. for scale filters).
-        """
         pattern = r'(-vf\s+)(["\'])(.*?)\2'
         match = re.search(pattern, command)
         if match:
@@ -85,18 +83,13 @@ GENERAL RULES:
         return command
 
     def replace_placeholder_with_file(self, command: str, actual_file: str) -> str:
-        """
-        Replace generic placeholder filename (like 'input.xxx') with the actual file name.
-        """
         if actual_file not in command:
             pattern = r"input\.[a-z0-9]+"
             command = re.sub(pattern, shlex.quote(actual_file), command, flags=re.IGNORECASE)
         return command
 
     def update_output_filename(self, command: str, input_file: str) -> str:
-        """
-        Update the output filename to be <basename>_toasted<ext>.
-        """
+        import os
         try:
             tokens = shlex.split(command)
         except Exception:

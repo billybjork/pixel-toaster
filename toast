@@ -81,6 +81,14 @@ def main():
                     user_query += f"\n(Found these files in the directory: {file_list_str}. Please use all of them as inputs.)"
                     detected_file = files
 
+        # --- Fuzzy Matching Fallback ---
+        if not detected_file:
+            fuzzy_file = file_manager.fuzzy_match_filename(user_query)
+            if fuzzy_file:
+                logging.info(f"Fuzzy matched file: {fuzzy_file}")
+                detected_file = fuzzy_file
+                user_query += f"\n(Using fuzzy matched file '{fuzzy_file}' as input.)"
+
     # --- Command Generation with Retries ---
     attempt = 0
     error_message = None
