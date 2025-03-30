@@ -1,268 +1,15 @@
 #!/usr/bin/env python3
-"""
-pixl-toastr: A natural language FFmpeg command generator.
-This tool uses ChatGPT (via the OpenAI API) to convert natural language prompts
-into executable FFmpeg commands.
-"""
-
-import os
+import argparse
+import logging
 import sys
 import json
-import subprocess
-import openai
-import logging
-import argparse
-import re
-import time
 import shlex
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv("/Users/billy/Dropbox/Projects/pixl-toastr/src/.env")  # Load .env from absolute project directory path, to ensure script is executable from any directory
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
-# ---------------------------------------------------------------------
-# Logging configuration with timestamp
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    level=logging.INFO,
-)
-
-# Media file extensions
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff"}
-AUDIO_EXTENSIONS = {".mp3", ".wav", ".aac", ".flac"}
-
-# System prompt for the LLM (return only raw JSON without markdown)
-SYSTEM_PROMPT = """\
-You are an FFmpeg command generator. 
-Return your result strictly as a JSON object with exactly the following schema, and do not include any markdown formatting or additional text:
-
-{"command": "the ffmpeg command"}
-
-GENERAL RULES:
-1. Output exactly one valid FFmpeg command.
-2. Do not use shell loops, piping, semicolons, or any extraneous syntax.
-3. If multiple input files are needed, use built-in FFmpeg techniques.
-4. If an input filename is known or provided, include it in the command.
-5. Always start the command with 'ffmpeg'.
-6. Do not include any explanation or markdown formatting; return only raw JSON.
-"""
-
-MAX_RETRIES = 3
-
-def clean_json_response(response_str):
-    """
-    Extract a JSON object from the LLM response:
-      - Remove markdown code block markers if present.
-      - Extract the text between the first '{' and the last '}'.
-    """
-    response_str = response_str.strip()
-    if response_str.startswith("```") and response_str.endswith("```"):
-        lines = response_str.splitlines()
-        if len(lines) >= 3:
-            response_str = "\n".join(lines[1:-1])
-        else:
-            response_str = response_str.strip("```")
-    try:
-        start = response_str.index("{")
-        end = response_str.rindex("}") + 1
-        response_str = response_str[start:end]
-    except ValueError:
-        pass
-    return response_str
-
-def fix_command_quotes(command):
-    """
-    Fix common quoting issues in the generated FFmpeg command.
-    
-    This function:
-      1. Looks for a scale filter written as: scale=min(400,iw)
-         and wraps the min() expression in single quotes to produce:
-         scale='min(400,iw)'
-      2. Ensures the entire -vf argument is enclosed in double quotes.
-    """
-    pattern = r'(-vf\s+)(["\'])(.*?)\2'
-    match = re.search(pattern, command)
-    if match:
-        prefix = match.group(1)
-        filters = match.group(3)
-        # Fix the scale filter: wrap min(...) in single quotes if not already
-        filters_fixed = re.sub(
-            r'scale\s*=\s*min\(([^)]+)\)',
-            lambda m: "scale='min({})'".format(m.group(1)),
-            filters,
-            flags=re.IGNORECASE
-        )
-        # Remove any stray double quotes within filters_fixed
-        filters_fixed = filters_fixed.replace('"', '')
-        new_vf = prefix + '"' + filters_fixed + '"'
-        command = re.sub(pattern, new_vf, command, count=1)
-    return command
-
-def update_output_filename(command, input_file):
-    """
-    Update the output filename in the FFmpeg command.
-    If input_file is a string, update the output filename to be <basename>_toasted<ext>.
-    If input_file is a list, update the output filename to be "combined_toasted<ext>".
-    """
-    try:
-        tokens = shlex.split(command)
-    except Exception:
-        tokens = command.split()
-    if len(tokens) < 3:
-        return command  # Not enough tokens to have an output file.
-    output_token = tokens[-1]
-    _, out_ext = os.path.splitext(output_token)
-    if isinstance(input_file, str):
-        base, _ = os.path.splitext(os.path.basename(input_file))
-        new_output = f"{base}_toasted{out_ext}"
-    else:
-        new_output = f"combined_toasted{out_ext}"
-    tokens[-1] = new_output
-    try:
-        new_command = shlex.join(tokens)
-    except AttributeError:
-        new_command = ' '.join(shlex.quote(token) for token in tokens)
-    return new_command
-
-def extract_explicit_filename(user_query):
-    """
-    Return a filename if a token in the user query looks like a file name with a known extension.
-    Avoid mistaking numbers (like "12.5") for filenames.
-    """
-    pattern = r'\b(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]+\.(?:mp4|mov|mkv|avi|webm|png|jpg|jpeg|bmp|tiff|gif)\b'
-    matches = re.findall(pattern, user_query, re.IGNORECASE)
-    return matches[0] if matches else None
-
-def detect_single_file_in_dir(dir_path, exts):
-    """
-    Return the filename if exactly one file in dir_path matches any extension in exts.
-    Otherwise, return None.
-    """
-    matches = []
-    for f in os.listdir(dir_path):
-        full_path = os.path.join(dir_path, f)
-        if os.path.isfile(full_path):
-            _, ext = os.path.splitext(f)
-            if ext.lower() in exts:
-                matches.append(f)
-    return matches[0] if len(matches) == 1 else None
-
-def list_files_in_dir(dir_path, exts):
-    """
-    Return a list of filenames in dir_path that match any extension in exts.
-    """
-    matches = []
-    for f in os.listdir(dir_path):
-        full_path = os.path.join(dir_path, f)
-        if os.path.isfile(full_path):
-            _, ext = os.path.splitext(f)
-            if ext.lower() in exts:
-                matches.append(f)
-    return matches
-
-def analyze_prompt_for_filetype(user_query):
-    """
-    Determine if the user query explicitly names a file.
-    If not, use keywords to guess the file type.
-    Returns (detected_ext_set, explicit_filename_found).
-    """
-    explicit_filename = extract_explicit_filename(user_query)
-    if explicit_filename:
-        return (None, explicit_filename)
-    lower_query = user_query.lower()
-    if "video" in lower_query or "mp4" in lower_query or "mov" in lower_query or "mkv" in lower_query:
-        return (VIDEO_EXTENSIONS, None)
-    elif "image" in lower_query or "png" in lower_query or "jpg" in lower_query:
-        return (IMAGE_EXTENSIONS, None)
-    elif "audio" in lower_query or "mp3" in lower_query or "wav" in lower_query:
-        return (AUDIO_EXTENSIONS, None)
-    elif "gif" in lower_query:
-        return (VIDEO_EXTENSIONS, None)
-    return (None, None)
-
-def replace_placeholder_with_file(command, actual_file):
-    """
-    If the command contains a generic placeholder filename (like 'input.mp4')
-    and does not already include the actual file name, replace it.
-    Uses shlex.quote to ensure proper shell quoting.
-    """
-    if actual_file not in command:
-        pattern = r"input\.[a-z0-9]+"
-        command = re.sub(pattern, shlex.quote(actual_file), command, flags=re.IGNORECASE)
-    return command
-
-def maybe_use_file_list(user_query, command, file_list):
-    """
-    If multiple files are detected and the query suggests stitching/concatenation,
-    automatically create a file list and modify the command to use the concat demuxer.
-    """
-    lower_query = user_query.lower()
-    if isinstance(file_list, list) and ("stitch" in lower_query or "concat" in lower_query):
-        filelist_filename = "filelist.txt"
-        try:
-            with open(filelist_filename, "w") as f:
-                for filename in file_list:
-                    # Ensure each filename is safely quoted inside the file list
-                    f.write(f"file {shlex.quote(filename)}\n")
-            logging.info(f"Created temporary file list: {filelist_filename}")
-        except Exception as e:
-            logging.error(f"Error creating file list: {e}")
-            return command
-        # Extract output file from the original command (last token)
-        try:
-            tokens = shlex.split(command)
-        except Exception:
-            tokens = command.split()
-        if len(tokens) < 2:
-            return command
-        output_token = tokens[-1]
-        # Construct new command using the concat demuxer
-        new_command = f"ffmpeg -f concat -safe 0 -i {shlex.quote(filelist_filename)} -c copy {shlex.quote(output_token)}"
-        return new_command
-    return command
-
-def generate_ffmpeg_command(user_query, error_message=None):
-    """
-    Call the OpenAI Chat API with the user query (and optional error context)
-    and return the raw response.
-    """
-    if error_message:
-        user_query += f"\nThe previous command failed with this error:\n{error_message}\nTry another approach."
-    response = openai.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_query}
-        ],
-        temperature=0.0
-    )
-    return response.choices[0].message.content
-
-def run_ffmpeg_command(command):
-    """
-    Execute the given command string via subprocess and return (success, output).
-    """
-    try:
-        completed_process = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True
-        )
-        if completed_process.returncode == 0:
-            return True, completed_process.stdout
-        else:
-            return False, completed_process.stderr
-    except Exception as e:
-        return False, str(e)
+from file_manager import FileManager
+from command_generator import CommandGenerator
+from command_executor import CommandExecutor
 
 def print_art():
-    """
-    Print the celebratory art to the terminal.
-    """
     art = r"""
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣄⠀⠀⠀⢀⡀⠀⠀⠀⣀⡀⠀⠀⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢰⣟⠁⠀⠀⣴⡏⠁⠀⠀⣾⡋⠁⠀⠀⠀⠀⠀⠀
@@ -273,9 +20,9 @@ def print_art():
 ⠀⠀⠀⠀⠀⠀⠀⣠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣦⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀
 ⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀
-⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠛⠿⣿⡇⠀⠀
+⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠛⠿⣿⡇⠀⠀
 ⠀⠀⠀⠀⠀⠀⠸⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠏⢠⣾⣿⣦⠘⠇⠀⠀
-⠀⠀⢀⣤⡀⠀⢰⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣆⠘⢿⣿⠟⢠⡆⠀⠀
+⠀⠀⢀⣤⡀⠀⢰⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣆⠘⢿⣿⠟⢠⡆⠀⠀
 ⠀⠀⠘⠛⠛⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣤⣤⣶⣿⡇⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⢠⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣄⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠘⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠛⠀⠀⠀⠀
@@ -293,107 +40,104 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output.")
     args = parser.parse_args()
 
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
-    
+    # Configure logging with a timestamp.
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    # Instantiate helper classes.
+    file_manager = FileManager()
+    command_generator = CommandGenerator()
+    command_executor = CommandExecutor()
+
     user_query = " ".join(args.query)
     logging.info(f"Interpreting your request: {user_query}")
 
+    # --- File Handling ---
     detected_file = None
-    # Handle explicit file parameter
     if args.file:
         logging.info(f"Using explicit file: {args.file}")
         detected_file = args.file
         user_query += f"\n(Use the file '{args.file}' as input.)"
     else:
-        ext_set, explicit_file = analyze_prompt_for_filetype(user_query)
+        ext_set, explicit_file = file_manager.analyze_prompt_for_filetype(user_query)
         if explicit_file:
-            logging.info(f"Found an explicit file in the prompt: {explicit_file}")
+            logging.info(f"Found explicit file in query: {explicit_file}")
             detected_file = explicit_file
         elif ext_set is not None:
-            found_file = detect_single_file_in_dir(".", ext_set)
+            found_file = file_manager.detect_single_file(ext_set)
             if found_file:
                 logging.info(f"Found a single matching file: {found_file}")
                 detected_file = found_file
                 user_query += f"\n(We found a single file named '{found_file}' in the directory. Please use that as input.)"
             else:
-                files = list_files_in_dir(".", ext_set)
+                files = file_manager.list_files(ext_set)
                 if files:
-                    logging.info(f"Found multiple files: {', '.join(files)}")
+                    logging.info(f"Found multiple matching files: {', '.join(files)}")
                     file_list_str = ", ".join(files)
                     user_query += f"\n(Found these files in the directory: {file_list_str}. Please use all of them as inputs.)"
                     detected_file = files
 
+    # --- Command Generation with Retries ---
     attempt = 0
     error_message = None
+    ffmpeg_command = None
 
-    while attempt < MAX_RETRIES:
+    while attempt < command_generator.max_retries:
         attempt += 1
         logging.info(f"--- Attempt #{attempt} ---")
-        json_string = generate_ffmpeg_command(user_query, error_message)
-        logging.debug(f"LLM response (raw): {json_string}")
-        
-        cleaned_json = clean_json_response(json_string)
-        logging.debug(f"LLM response (cleaned): {cleaned_json}")
-        
+        raw_response = command_generator.generate_command(user_query, error_message)
+        logging.debug(f"LLM raw response: {raw_response}")
+        cleaned_json = command_generator.clean_json_response(raw_response)
+        logging.debug(f"LLM cleaned response: {cleaned_json}")
+
         try:
             parsed = json.loads(cleaned_json)
             ffmpeg_command = parsed.get("command", "").strip()
-        except json.JSONDecodeError as e:
-            logging.error("LLM did not return valid JSON after cleaning.")
-            error_message = f"JSON parse error: {e}. Original response: {json_string}"
-            time.sleep(2 ** attempt)
+        except Exception as e:
+            logging.error("Failed to parse JSON response from LLM.")
+            error_message = f"JSON parse error: {e}. Original response: {raw_response}"
             continue
 
         if not ffmpeg_command or not ffmpeg_command.startswith("ffmpeg"):
             logging.error("Invalid command received from LLM:")
             logging.error(cleaned_json)
             error_message = f"Invalid command: {cleaned_json}"
-            time.sleep(2 ** attempt)
             continue
 
-        # For single file, try to replace generic placeholder with the actual filename.
+        # --- Adjust the Command Based on the File(s) ---
         if detected_file:
             if isinstance(detected_file, str):
-                ffmpeg_command = replace_placeholder_with_file(ffmpeg_command, detected_file)
-            else:
-                # For multiple files, assume the LLM used the file names provided in the prompt.
-                pass
-        
-        ffmpeg_command = fix_command_quotes(ffmpeg_command)
-        if detected_file:
-            ffmpeg_command = update_output_filename(ffmpeg_command, detected_file)
-        
-        # If multiple files are detected and the query suggests stitching, use a file list.
-        if isinstance(detected_file, list):
-            ffmpeg_command = maybe_use_file_list(user_query, ffmpeg_command, detected_file)
-        
+                ffmpeg_command = command_generator.replace_placeholder_with_file(ffmpeg_command, detected_file)
+                ffmpeg_command = command_generator.update_output_filename(ffmpeg_command, detected_file)
+            elif isinstance(detected_file, list):
+                # If multiple files are detected, create a file list for concat.
+                filelist_filename = file_manager.create_filelist_for_concat(detected_file)
+                if filelist_filename:
+                    try:
+                        tokens = shlex.split(ffmpeg_command)
+                    except Exception:
+                        tokens = ffmpeg_command.split()
+                    if len(tokens) >= 2:
+                        output_token = tokens[-1]
+                        ffmpeg_command = f"ffmpeg -f concat -safe 0 -i {shlex.quote(filelist_filename)} -c copy {shlex.quote(output_token)}"
+        ffmpeg_command = command_generator.fix_command_quotes(ffmpeg_command)
         logging.info(f"Proposed command: {ffmpeg_command}")
 
-        if args.confirm:
-            confirm = input("Execute this command? (y/N): ").strip().lower()
-            if confirm != "y":
-                logging.info("Command execution cancelled by user.")
-                sys.exit(0)
-
-        if args.dry_run:
-            logging.info("Dry-run mode enabled. Exiting without executing the command.")
-            sys.exit(0)
-        
-        success, output = run_ffmpeg_command(ffmpeg_command)
+        # --- Execute the Command ---
+        success, output = command_executor.execute_with_retries(ffmpeg_command, args.confirm, args.dry_run)
         if success:
             logging.info("Command executed successfully!")
             logging.debug(f"Command output: {output}")
-            # Print the art after a successful execution.
             print_art()
             sys.exit(0)
         else:
-            logging.error("Command failed. Error message:")
-            logging.error(output)
+            logging.error("Command execution failed, retrying...")
             error_message = output
-            logging.info("Retrying...\n")
-            time.sleep(2 ** attempt)
-    
+
     logging.error("Maximum retries exceeded. Exiting with error.")
     sys.exit(1)
 
