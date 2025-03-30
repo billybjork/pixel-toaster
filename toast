@@ -146,8 +146,8 @@ def main():
                 ffmpeg_command = command_generator.replace_placeholder_with_file(ffmpeg_command, detected_file)
                 ffmpeg_command = command_generator.update_output_filename(ffmpeg_command, detected_file, desired_ext=desired_output_ext)
             elif isinstance(detected_file, list):
-                # Check if the query implies an individual transformation (e.g. "flip", "rotate", "trim", "compress", "convert")
-                if any(keyword in user_query.lower() for keyword in ["flip", "rotate", "trim", "compress", "convert"]):
+                # Check if the query implies an individual transformation (e.g. "rotate", "trim", "compress", "convert")
+                if any(keyword in user_query.lower() for keyword in ["rotate", "trim", "compress", "convert"]):
                     # --- Special handling for video trim (and conversion) ---
                     if "trim" in user_query.lower():
                         # Use extracted trim duration or default to 5 seconds.
@@ -172,20 +172,6 @@ def main():
                                     logging.error(f"Command failed for {f}: {output}")
                             else:
                                 logging.info(f"Skipping file {f} as it is not recognized as a video for trimming.")
-                        # Display toast art before exiting.
-                        print_art()
-                        sys.exit(0)
-                    # --- Special handling for flip ---
-                    if "flip" in user_query.lower():
-                        for f in detected_file:
-                            import os, shlex
-                            base, ext = os.path.splitext(f)
-                            output_name = f"{base}_toasted{ext}"
-                            cmd = f"ffmpeg -i {shlex.quote(f)} -vf vflip {shlex.quote(output_name)}"
-                            logging.info(f"Executing flip command for file {f}: {cmd}")
-                            success, output = command_executor.execute_with_retries(cmd, args.confirm, args.dry_run)
-                            if not success:
-                                logging.error(f"Command failed for {f}: {output}")
                         print_art()
                         sys.exit(0)
                     # --- Generic per-file processing ---
