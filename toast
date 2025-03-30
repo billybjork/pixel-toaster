@@ -81,15 +81,13 @@ def main():
                     user_query += f"\n(Found these files in the directory: {file_list_str}. Please use all of them as inputs.)"
                     detected_file = files
 
-        # --- Fuzzy Matching Fallback ---
+        # --- Fuzzy and Normalized Matching Fallbacks ---
         if not detected_file:
             fuzzy_file = file_manager.fuzzy_match_filename(user_query)
             if fuzzy_file:
                 logging.info(f"Fuzzy matched file: {fuzzy_file}")
                 detected_file = fuzzy_file
                 user_query += f"\n(Using fuzzy matched file '{fuzzy_file}' as input.)"
-        
-        # --- Normalized Matching Fallback ---
         if not detected_file:
             norm_file = file_manager.normalized_match_filename(user_query)
             if norm_file:
@@ -130,16 +128,32 @@ def main():
                 ffmpeg_command = command_generator.replace_placeholder_with_file(ffmpeg_command, detected_file)
                 ffmpeg_command = command_generator.update_output_filename(ffmpeg_command, detected_file)
             elif isinstance(detected_file, list):
-                # If multiple files are detected, create a file list for concat.
-                filelist_filename = file_manager.create_filelist_for_concat(detected_file)
-                if filelist_filename:
-                    try:
-                        tokens = shlex.split(ffmpeg_command)
-                    except Exception:
-                        tokens = ffmpeg_command.split()
-                    if len(tokens) >= 2:
-                        output_token = tokens[-1]
-                        ffmpeg_command = f"ffmpeg -f concat -safe 0 -i {shlex.quote(filelist_filename)} -c copy {shlex.quote(output_token)}"
+                # Check if the query implies an individual transformation (e.g. "flip", "trim", etc.)
+                if any(keyword in user_query.lower() for keyword in ["flip", "rotate", "trim", "compress"]):
+                    # For example, if flipping is requested, manually build a per-file command.
+                    # Here, we specifically handle "flip" (upside down means vflip).
+                    if "flip" in user_query.lower():
+                        for f in detected_file:
+                            import os, shlex
+                            base, ext = os.path.splitext(f)
+                            output_name = f"{base}_toasted{ext}"
+                            cmd = f"ffmpeg -i {shlex.quote(f)} -vf vflip {shlex.quote(output_name)}"
+                            logging.info(f"Executing flip command for file {f}: {cmd}")
+                            success, output = command_executor.execute_with_retries(cmd, args.confirm, args.dry_run)
+                            if not success:
+                                logging.error(f"Command failed for {f}: {output}")
+                        sys.exit(0)
+                    # Otherwise, if no special transformation detected, you can either:
+                    # a) Concatenate (if that was the intended operation)
+                    # b) Or process individually – here we choose to process individually.
+                    for f in detected_file:
+                        per_file_cmd = command_generator.replace_placeholder_with_file(ffmpeg_command, f)
+                        per_file_cmd = command_generator.update_output_filename(per_file_cmd, f)
+                        logging.info(f"Executing command for file {f}: {per_file_cmd}")
+                        success, output = command_executor.execute_with_retries(per_file_cmd, args.confirm, args.dry_run)
+                        if not success:
+                            logging.error(f"Command failed for {f}: {output}")
+                    sys.exit(0)
         ffmpeg_command = command_generator.fix_command_quotes(ffmpeg_command)
         logging.info(f"Proposed command: {ffmpeg_command}")
 

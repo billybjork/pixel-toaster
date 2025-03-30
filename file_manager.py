@@ -79,20 +79,23 @@ class FileManager:
         if explicit:
             return (None, explicit)
         lower_query = user_query.lower()
-        # Check for video and audio keywords first.
+        # If the user explicitly mentions jpg (or jpeg) but not png, use jpg set.
+        if "jpg" in lower_query and "png" not in lower_query:
+            return ({".jpg", ".jpeg"}, None)
+        # If png is explicitly mentioned, then use png.
+        if "png" in lower_query:
+            return ({".png"}, None)
         if "video" in lower_query or re.search(r'\b(mp4|mov|mkv|avi|webm)\b', lower_query):
             return (VIDEO_EXTENSIONS, None)
-        # Look for explicit "png file" pattern first.
-        if re.search(r'\bpng file\b', lower_query):
-            return ({".png"}, None)
-        # Then look for explicit "jpg file" or "jpeg file" pattern.
-        if re.search(r'\b(jpg|jpeg) file\b', lower_query):
+        # Handle plural forms like "jpg files"
+        if re.search(r'\b(jpg|jpeg)(?:\s+files?)?\b', lower_query):
             return ({".jpg", ".jpeg"}, None)
+        if re.search(r'\bpng(?:\s+files?)?\b', lower_query):
+            return ({".png"}, None)
         if "audio" in lower_query or re.search(r'\b(mp3|wav|aac|flac)\b', lower_query):
             return (AUDIO_EXTENSIONS, None)
         if "gif" in lower_query:
             return (VIDEO_EXTENSIONS, None)
-        # Fallback for generic images if words "image", "png", or "jpg" appear.
         if "image" in lower_query or "png" in lower_query or "jpg" in lower_query:
             return (IMAGE_EXTENSIONS, None)
         return (None, None)
