@@ -90,6 +90,7 @@ GENERAL RULES:
 
     def update_output_filename(self, command: str, input_file: str) -> str:
         import os
+        from file_manager import IMAGE_EXTENSIONS  # use the defined image extensions
         try:
             tokens = shlex.split(command)
         except Exception:
@@ -98,6 +99,10 @@ GENERAL RULES:
             return command
         output_token = tokens[-1]
         _, out_ext = os.path.splitext(output_token)
+        _, in_ext = os.path.splitext(input_file)
+        # Force the output extension to match the input if it's an image.
+        if in_ext.lower() in IMAGE_EXTENSIONS:
+            out_ext = in_ext
         base, _ = os.path.splitext(os.path.basename(input_file))
         new_output = f"{base}_toasted{out_ext}"
         tokens[-1] = new_output
