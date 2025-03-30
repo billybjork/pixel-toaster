@@ -4,6 +4,7 @@ import logging
 import sys
 import json
 import shlex
+import re
 
 from file_manager import FileManager, VIDEO_EXTENSIONS
 from command_generator import CommandGenerator
@@ -55,6 +56,23 @@ def main():
 
     user_query = " ".join(args.query)
     logging.info(f"Interpreting your request: {user_query}")
+
+    # --- Conversion Request Detection ---
+    desired_output_ext = None
+    lower_query = user_query.lower()
+    # Look for generic conversion queries, e.g. "convert all mp4 files to mov"
+    conv_match = re.search(r'convert\s+all\s+(\w+)\s+files?\s+to\s+(\w+)', lower_query)
+    if conv_match:
+        src_ext, dst_ext = conv_match.groups()
+        desired_output_ext = f".{dst_ext}"
+        logging.info(f"Detected conversion request: from .{src_ext} to {desired_output_ext}")
+
+    # --- Trim Duration Extraction ---
+    trim_duration = None
+    trim_match = re.search(r'trim.*?(\d+)\s*sec', lower_query)
+    if trim_match:
+        trim_duration = trim_match.group(1)
+        logging.info(f"Detected trim duration: {trim_duration} seconds")
 
     # --- File Handling ---
     detected_file = None
@@ -126,22 +144,28 @@ def main():
         if detected_file:
             if isinstance(detected_file, str):
                 ffmpeg_command = command_generator.replace_placeholder_with_file(ffmpeg_command, detected_file)
-                ffmpeg_command = command_generator.update_output_filename(ffmpeg_command, detected_file)
+                ffmpeg_command = command_generator.update_output_filename(ffmpeg_command, detected_file, desired_ext=desired_output_ext)
             elif isinstance(detected_file, list):
                 # Check if the query implies an individual transformation (e.g. "flip", "rotate", "trim", etc.)
-                if any(keyword in user_query.lower() for keyword in ["flip", "rotate", "trim", "compress"]):
-                    # --- Special handling for video trim ---
+                if any(keyword in user_query.lower() for keyword in ["flip", "rotate", "trim", "compress", "convert"]):
+                    # --- Special handling for video trim (and conversion) ---
                     if "trim" in user_query.lower():
-                        # For demonstration, we'll assume a trim duration of 5 seconds.
-                        duration = "5"
+                        # Use extracted trim duration or default to 5 seconds.
+                        duration = trim_duration if trim_duration is not None else "5"
                         for f in detected_file:
                             import os, shlex
                             _, ext = os.path.splitext(f)
                             # Process only video files.
                             if ext.lower() in VIDEO_EXTENSIONS:
                                 base = os.path.splitext(f)[0]
-                                output_name = f"{base}_toasted{ext}"
-                                cmd = f"ffmpeg -i {shlex.quote(f)} -t {duration} -c copy {shlex.quote(output_name)}"
+                                # If a conversion is requested, use the desired extension; otherwise, use the original.
+                                out_ext = desired_output_ext if desired_output_ext and desired_output_ext != ext.lower() else ext
+                                output_name = f"{base}_toasted{out_ext}"
+                                # If converting (i.e. desired ext differs from input), do not use stream copy.
+                                if desired_output_ext and desired_output_ext != ext.lower():
+                                    cmd = f"ffmpeg -i {shlex.quote(f)} -t {duration} {shlex.quote(output_name)}"
+                                else:
+                                    cmd = f"ffmpeg -i {shlex.quote(f)} -t {duration} -c copy {shlex.quote(output_name)}"
                                 logging.info(f"Executing trim command for video file {f}: {cmd}")
                                 success, output = command_executor.execute_with_retries(cmd, args.confirm, args.dry_run)
                                 if not success:
@@ -164,7 +188,7 @@ def main():
                     # --- Generic per-file processing ---
                     for f in detected_file:
                         per_file_cmd = command_generator.replace_placeholder_with_file(ffmpeg_command, f)
-                        per_file_cmd = command_generator.update_output_filename(per_file_cmd, f)
+                        per_file_cmd = command_generator.update_output_filename(per_file_cmd, f, desired_ext=desired_output_ext)
                         logging.info(f"Executing command for file {f}: {per_file_cmd}")
                         success, output = command_executor.execute_with_retries(per_file_cmd, args.confirm, args.dry_run)
                         if not success:
