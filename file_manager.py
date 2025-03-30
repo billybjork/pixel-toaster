@@ -16,10 +16,25 @@ class FileManager:
     def extract_explicit_filename(self, user_query: str) -> Optional[str]:
         """
         Look for a token in the query that looks like a filename.
+        First, try matching a proper filename with an extension.
+        Then, if not found, check if any token matches a file's base name exactly.
         """
+        # First, check for an explicit filename with an extension.
         pattern = r'\b(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]+\.(?:mp4|mov|mkv|avi|webm|png|jpg|jpeg|bmp|tiff|gif)\b'
         matches = re.findall(pattern, user_query, re.IGNORECASE)
-        return matches[0] if matches else None
+        if matches:
+            return matches[0]
+        
+        # If no extension was provided, try matching tokens against file base names.
+        tokens = re.findall(r'\b[\w-]{5,}\b', user_query)
+        for f in os.listdir(self.directory):
+            full_path = os.path.join(self.directory, f)
+            if os.path.isfile(full_path):
+                base, _ = os.path.splitext(f)
+                for token in tokens:
+                    if token.lower() == base.lower():
+                        return f
+        return None
 
     def fuzzy_match_filename(self, user_query: str, ext_set: set = None) -> Optional[str]:
         """
