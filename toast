@@ -5,7 +5,7 @@ import sys
 import json
 import shlex
 
-from file_manager import FileManager
+from file_manager import FileManager, VIDEO_EXTENSIONS
 from command_generator import CommandGenerator
 from command_executor import CommandExecutor
 
@@ -128,10 +128,28 @@ def main():
                 ffmpeg_command = command_generator.replace_placeholder_with_file(ffmpeg_command, detected_file)
                 ffmpeg_command = command_generator.update_output_filename(ffmpeg_command, detected_file)
             elif isinstance(detected_file, list):
-                # Check if the query implies an individual transformation (e.g. "flip", "trim", etc.)
+                # Check if the query implies an individual transformation (e.g. "flip", "rotate", "trim", etc.)
                 if any(keyword in user_query.lower() for keyword in ["flip", "rotate", "trim", "compress"]):
-                    # For example, if flipping is requested, manually build a per-file command.
-                    # Here, we specifically handle "flip" (upside down means vflip).
+                    # --- Special handling for video trim ---
+                    if "trim" in user_query.lower():
+                        # For demonstration, we'll assume a trim duration of 5 seconds.
+                        duration = "5"
+                        for f in detected_file:
+                            import os, shlex
+                            _, ext = os.path.splitext(f)
+                            # Process only video files.
+                            if ext.lower() in VIDEO_EXTENSIONS:
+                                base = os.path.splitext(f)[0]
+                                output_name = f"{base}_toasted{ext}"
+                                cmd = f"ffmpeg -i {shlex.quote(f)} -t {duration} -c copy {shlex.quote(output_name)}"
+                                logging.info(f"Executing trim command for video file {f}: {cmd}")
+                                success, output = command_executor.execute_with_retries(cmd, args.confirm, args.dry_run)
+                                if not success:
+                                    logging.error(f"Command failed for {f}: {output}")
+                            else:
+                                logging.info(f"Skipping file {f} as it is not recognized as a video for trimming.")
+                        sys.exit(0)
+                    # --- Special handling for flip ---
                     if "flip" in user_query.lower():
                         for f in detected_file:
                             import os, shlex
@@ -143,9 +161,7 @@ def main():
                             if not success:
                                 logging.error(f"Command failed for {f}: {output}")
                         sys.exit(0)
-                    # Otherwise, if no special transformation detected, you can either:
-                    # a) Concatenate (if that was the intended operation)
-                    # b) Or process individually – here we choose to process individually.
+                    # --- Generic per-file processing ---
                     for f in detected_file:
                         per_file_cmd = command_generator.replace_placeholder_with_file(ffmpeg_command, f)
                         per_file_cmd = command_generator.update_output_filename(per_file_cmd, f)
