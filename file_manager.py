@@ -12,7 +12,7 @@ AUDIO_EXTENSIONS = {".mp3", ".wav", ".aac", ".flac"}
 class FileManager:
     def __init__(self, directory: str = "."):
         self.directory = directory
-
+    
     def extract_explicit_filename(self, user_query: str) -> Optional[str]:
         """
         Look for a token in the query that looks like a filename.
@@ -112,3 +112,30 @@ class FileManager:
         except Exception as e:
             logging.error(f"Error creating file list: {e}")
             return None
+        
+    def normalized_match_filename(self, user_query: str, ext_set: set = None) -> Optional[str]:
+        """
+        Attempts to match a filename by normalizing both the query and the file basenames.
+        This ignores spaces and case differences. For example, a query "escape v2" would match
+        a file named "ESCAPE V2.mp4".
+        """
+        if ext_set is None:
+            ext_set = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS | AUDIO_EXTENSIONS
+        # Normalize the query: lower-case and remove non-alphanumeric characters.
+        normalized_query = ''.join(ch for ch in user_query.lower() if ch.isalnum())
+        candidate_files = []
+        for f in os.listdir(self.directory):
+            full_path = os.path.join(self.directory, f)
+            if os.path.isfile(full_path):
+                base, ext = os.path.splitext(f)
+                if ext.lower() in ext_set:
+                    normalized_base = ''.join(ch for ch in base.lower() if ch.isalnum())
+                    if normalized_base in normalized_query or normalized_query in normalized_base:
+                        candidate_files.append(f)
+        if len(candidate_files) == 1:
+            return candidate_files[0]
+        elif candidate_files:
+            logging.info("Multiple normalized matches found: " + ", ".join(candidate_files))
+            # Return the first match for now.
+            return candidate_files[0]
+        return None

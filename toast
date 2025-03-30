@@ -88,6 +88,14 @@ def main():
                 logging.info(f"Fuzzy matched file: {fuzzy_file}")
                 detected_file = fuzzy_file
                 user_query += f"\n(Using fuzzy matched file '{fuzzy_file}' as input.)"
+        
+        # --- Normalized Matching Fallback ---
+        if not detected_file:
+            norm_file = file_manager.normalized_match_filename(user_query)
+            if norm_file:
+                logging.info(f"Normalized matched file: {norm_file}")
+                detected_file = norm_file
+                user_query += f"\n(Using normalized matched file '{norm_file}' as input.)"
 
     # --- Command Generation with Retries ---
     attempt = 0

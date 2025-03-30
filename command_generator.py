@@ -83,10 +83,21 @@ GENERAL RULES:
         return command
 
     def replace_placeholder_with_file(self, command: str, actual_file: str) -> str:
-        if actual_file not in command:
-            pattern = r"input\.[a-z0-9]+"
-            command = re.sub(pattern, shlex.quote(actual_file), command, flags=re.IGNORECASE)
-        return command
+        import shlex
+        try:
+            tokens = shlex.split(command)
+        except Exception:
+            tokens = command.split()
+        # Look for the "-i" flag and replace the following token with the actual file.
+        for idx, token in enumerate(tokens):
+            if token.lower() == "-i" and idx + 1 < len(tokens):
+                tokens[idx + 1] = actual_file
+                break
+        try:
+            new_command = shlex.join(tokens)
+        except AttributeError:
+            new_command = ' '.join(shlex.quote(token) for token in tokens)
+        return new_command
 
     def update_output_filename(self, command: str, input_file: str) -> str:
         import os
