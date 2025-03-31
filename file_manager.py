@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple, Union
 
 # Supported file extensions
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".heic"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".aac", ".flac"}
 
 class FileManager:
@@ -19,8 +19,7 @@ class FileManager:
         First, try matching a proper filename with an extension.
         Then, if not found, check if any token matches a file's base name exactly.
         """
-        # First, check for an explicit filename with an extension.
-        pattern = r'\b(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]+\.(?:mp4|mov|mkv|avi|webm|png|jpg|jpeg|bmp|tiff|gif)\b'
+        pattern = r'\b(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]+\.(?:mp4|mov|mkv|avi|webm|png|jpg|jpeg|bmp|tiff|gif|heic)\b'
         matches = re.findall(pattern, user_query, re.IGNORECASE)
         if matches:
             return matches[0]
@@ -84,40 +83,38 @@ class FileManager:
         files = self.list_files(exts)
         return files[0] if len(files) == 1 else None
 
-    def analyze_prompt_for_filetype(
-        self, user_query: str
-    ) -> Tuple[Optional[set], Optional[Union[str, List[str]]]]:
+    def analyze_prompt_for_filetype(self, user_query: str) -> Tuple[Optional[set], Optional[Union[str, List[str]]]]:
         """
         Return a tuple: (set_of_extensions, explicit_filename_or_none).
+        The logic here prioritizes keywords such as "video", "audio", or "image".
+        For example, if the query mentions "image", then it returns IMAGE_EXTENSIONS (which includes .heic).
         """
         explicit = self.extract_explicit_filename(user_query)
         if explicit:
             return (None, explicit)
         lower_query = user_query.lower()
-        # If the user explicitly mentions jpg (or jpeg) but not png, use jpg set.
-        if "jpg" in lower_query and "png" not in lower_query:
-            return ({".jpg", ".jpeg"}, None)
-        # If png is explicitly mentioned, then use png.
-        if "png" in lower_query:
-            return ({".png"}, None)
+        # Prioritize if the user mentions video or audio.
         if "video" in lower_query or re.search(r'\b(mp4|mov|mkv|avi|webm)\b', lower_query):
             return (VIDEO_EXTENSIONS, None)
-        # Handle plural forms like "jpg files"
+        if "audio" in lower_query or re.search(r'\b(mp3|wav|aac|flac)\b', lower_query):
+            return (AUDIO_EXTENSIONS, None)
+        # If the user mentions "image", return all image extensions.
+        if "image" in lower_query:
+            return (IMAGE_EXTENSIONS, None)
+        # Fallback: check for specific image type keywords.
+        if "jpg" in lower_query and "png" not in lower_query:
+            return ({".jpg", ".jpeg"}, None)
+        if "png" in lower_query:
+            return ({".png"}, None)
         if re.search(r'\b(jpg|jpeg)(?:\s+files?)?\b', lower_query):
             return ({".jpg", ".jpeg"}, None)
         if re.search(r'\bpng(?:\s+files?)?\b', lower_query):
             return ({".png"}, None)
-        if "audio" in lower_query or re.search(r'\b(mp3|wav|aac|flac)\b', lower_query):
-            return (AUDIO_EXTENSIONS, None)
         if "gif" in lower_query:
             return (VIDEO_EXTENSIONS, None)
-        if "image" in lower_query or "png" in lower_query or "jpg" in lower_query:
-            return (IMAGE_EXTENSIONS, None)
         return (None, None)
 
-    def create_filelist_for_concat(
-        self, file_list: List[str], filelist_filename: str = "filelist.txt"
-    ) -> Optional[str]:
+    def create_filelist_for_concat(self, file_list: List[str], filelist_filename: str = "filelist.txt") -> Optional[str]:
         """
         Create a temporary file list for ffmpeg concat.
         """
@@ -134,12 +131,11 @@ class FileManager:
     def normalized_match_filename(self, user_query: str, ext_set: set = None) -> Optional[str]:
         """
         Attempts to match a filename by normalizing both the query and the file basenames.
-        This ignores spaces and case differences. For example, a query "escape v2" would match
-        a file named "ESCAPE V2.mp4".
+        This ignores spaces and case differences.
+        For example, a query "escape v2" would match a file named "ESCAPE V2.mp4".
         """
         if ext_set is None:
             ext_set = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS | AUDIO_EXTENSIONS
-        # Normalize the query: lower-case and remove non-alphanumeric characters.
         normalized_query = ''.join(ch for ch in user_query.lower() if ch.isalnum())
         candidate_files = []
         for f in os.listdir(self.directory):
@@ -154,6 +150,5 @@ class FileManager:
             return candidate_files[0]
         elif candidate_files:
             logging.info("Multiple normalized matches found: " + ", ".join(candidate_files))
-            # Return the first match for now.
             return candidate_files[0]
         return None

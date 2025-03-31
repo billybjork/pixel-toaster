@@ -44,13 +44,10 @@ GENERAL RULES:
         return response_str
 
     def generate_command(self, user_query: str, error_message: str = None) -> str:
-        # Check if the query has a file size constraint or general compression request.
         target_size = extract_target_file_size(user_query)
         if target_size:
-            # Append instruction with the exact target size in bytes.
             user_query += f"\nEnsure the output file is no larger than {target_size} bytes."
         elif needs_compression(user_query):
-            # Otherwise, simply require the output to be compressed.
             user_query += "\nEnsure that the output file is compressed (i.e., smaller than the input file)."
 
         if error_message:
@@ -88,20 +85,32 @@ GENERAL RULES:
             tokens = shlex.split(command)
         except Exception:
             tokens = command.split()
-        # Look for the "-i" flag and replace the following token with the actual file.
-        for idx, token in enumerate(tokens):
-            if token.lower() == "-i" and idx + 1 < len(tokens):
-                tokens[idx + 1] = actual_file
-                break
+        new_tokens = []
+        found_input = False
+        i = 0
+        while i < len(tokens):
+            if tokens[i].lower() == "-i":
+                if not found_input:
+                    found_input = True
+                    new_tokens.append(tokens[i])
+                    if i + 1 < len(tokens):
+                        new_tokens.append(actual_file)
+                    i += 2
+                else:
+                    # Skip any additional "-i" and its argument.
+                    i += 2
+            else:
+                new_tokens.append(tokens[i])
+                i += 1
         try:
-            new_command = shlex.join(tokens)
+            new_command = shlex.join(new_tokens)
         except AttributeError:
-            new_command = ' '.join(shlex.quote(token) for token in tokens)
+            new_command = ' '.join(shlex.quote(token) for token in new_tokens)
         return new_command
 
     def update_output_filename(self, command: str, input_file: str, desired_ext: str = None) -> str:
         import os
-        from file_manager import IMAGE_EXTENSIONS  # use the defined image extensions
+        from file_manager import IMAGE_EXTENSIONS
         try:
             tokens = shlex.split(command)
         except Exception:
@@ -111,11 +120,9 @@ GENERAL RULES:
         output_token = tokens[-1]
         _, out_ext = os.path.splitext(output_token)
         _, in_ext = os.path.splitext(input_file)
-        # If desired_ext is provided (e.g. ".jpg"), override the output extension.
         if desired_ext:
             out_ext = desired_ext
         else:
-            # Force the output extension to match the input if it's an image.
             if in_ext.lower() in IMAGE_EXTENSIONS:
                 out_ext = in_ext
         base, _ = os.path.splitext(os.path.basename(input_file))
