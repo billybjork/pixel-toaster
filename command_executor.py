@@ -11,19 +11,31 @@ class CommandExecutor:
         """
         Run the given shell command and return (success, output).
         """
+        # Inside run_command
         try:
+            # Split the command into a list of arguments
+            command_list = shlex.split(command)
+            # Ensure 'ffmpeg' is the first element if needed, though shlex should handle paths
+            if not command_list:
+                return False, "Empty command"
+
             completed_process = subprocess.run(
-                command,
-                shell=True,
+                command_list, # Pass the list here
+                # shell=False, # Default, safer
                 capture_output=True,
-                text=True
+                text=True,
+                check=False # Don't raise exception on non-zero exit code
             )
             if completed_process.returncode == 0:
                 return True, completed_process.stdout
             else:
-                return False, completed_process.stderr
+                # Combine stdout and stderr for more context on failure
+                error_output = f"Exit Code: {completed_process.returncode}\nStderr: {completed_process.stderr}\nStdout: {completed_process.stdout}"
+                return False, error_output.strip()
+        except FileNotFoundError:
+            return False, f"Error: 'ffmpeg' command not found. Is FFmpeg installed and in your PATH?"
         except Exception as e:
-            return False, str(e)
+            return False, f"Subprocess execution error: {str(e)}"
 
     def execute_with_retries(self, command: str, confirm: bool = False, dry_run: bool = False) -> tuple[bool, str]:
         """
