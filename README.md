@@ -1,4 +1,4 @@
-# toast (pixel-toaster)
+# pixel-toaster
 
 Say goodbye to memorizing complex FFmpeg flags, or copying and pasting Ffmpeg commands from ChatGPT! Just tell `toast` what you want to do.
 
