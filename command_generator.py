@@ -1,135 +1,173 @@
+import os
 import json
 import re
-import shlex
 import logging
 import openai
-from dotenv import load_dotenv
-from compression_utils import extract_target_file_size, needs_compression
+from typing import List, Dict, Optional
 
 class CommandGenerator:
-    SYSTEM_PROMPT = """\
-You are an FFmpeg command generator.
-Return your result strictly as a JSON object with exactly the following schema, and do not include any markdown formatting or additional text:
-
-{"command": "the ffmpeg command"}
-
-GENERAL RULES:
-1. Output exactly one valid FFmpeg command.
-2. Do not use shell loops, piping, semicolons, or any extraneous syntax.
-3. If multiple input files are needed, use built-in FFmpeg techniques.
-4. If an input filename is known or provided, include it in the command.
-5. Always start the command with 'ffmpeg'.
-6. Do not include any explanation or markdown formatting; return only raw JSON.
-"""
+    # --- Enhanced System Prompt ---
+    SYSTEM_PROMPT_TEMPLATE = """\
     
-    def __init__(self, max_retries: int = 3, temperature: float = 0.0):
-        load_dotenv()
-        self.max_retries = max_retries
+You are an expert assistant specialized in generating FFmpeg commands based on user requests.
+Your goal is to provide a single, correct, and safe FFmpeg command or shell loop.
+
+RETURN FORMAT:
+Strictly output a JSON object with TWO keys: "explanation" and "command". Do NOT include markdown formatting (```json ... ```) or any other text outside the JSON object.
+- "explanation": A list of strings, where each string briefly explains a part or flag of the generated command/loop. Explain ALL parts.
+- "command": A single string containing the complete command(s) to be executed (this might be a single FFmpeg command OR a shell loop containing an FFmpeg command).
+
+SYSTEM CONTEXT:
+The command will be executed on the user's system with the following details:
+- Operating System: {os_info} ({os_type})
+- Default Shell: {shell} (Assume bash/zsh compatible unless shell is explicitly 'cmd.exe')
+- FFmpeg Version: {ffmpeg_version}
+- FFmpeg Path: {ffmpeg_executable_path}
+- Current Directory: {current_directory}
+{file_context}
+
+COMMAND GENERATION RULES:
+1.  **Command Structure:** Generate a single command string. This string might contain just one FFmpeg command OR a shell loop structure calling FFmpeg.
+2.  **Batch Processing (VERY IMPORTANT):**
+    *   If the user request implies processing **multiple files** (e.g., using words like "all", "every", "batch", or a wildcard like `*.ext`) AND the FILE CONTEXT (`detected_files_in_directory:`) lists multiple relevant files, you **MUST** generate a **shell loop** suitable for the detected `{shell}`.
+    *   **Do NOT generate a command for only the first detected file in batch requests.**
+    *   **Wildcard Case Sensitivity:** Be mindful of case sensitivity in file patterns (e.g., `.mov` vs `.MOV`). If possible, generate a pattern that matches common variations. For bash/zsh, you might use extended globbing if enabled (`shopt -s extglob; for file in *.@(mov|MOV); ...`) or simply list both patterns if safe (`for file in *.mov *.MOV; ...`). If unsure, use a pattern matching the case shown in `detected_files_in_directory` or generate separate loops/patterns if mixed cases are likely. **Avoid patterns that might fail with "no matches found" errors if possible.** Use `nullglob` (`shopt -s nullglob; for ...`) in bash/zsh if the loop should simply do nothing when no files match.
+    *   **Example Loop (bash/zsh with case handling & nullglob):** `sh -c 'shopt -s nullglob extglob; for file in "$PWD"/*.@(mov|MOV); do "{ffmpeg_executable_path}" -i "$file" [OPTIONS] "${{file%.*}}_toasted.${{file##*.}}" -y; done'` (Uses `sh -c` for robustness, sets nullglob/extglob, uses `$PWD` for CWD, tries to preserve original extension case in output). Adapt the pattern `@(mov|MOV)` based on the user request. Ensure proper quoting (`"$file"`, `"${{...}}"`)!
+    *   If only one relevant file is detected or specified (`explicit_input_file:`), generate a single FFmpeg command, not a loop.
+3.  **Input Files (Single Command):** Use the specific input file path from `explicit_input_file:` or the single relevant file from `detected_files_in_directory:`. Ensure it's correctly quoted.
+4.  **Output Filenames:** Generate sensible output filenames. Append `_toasted`. Preserve original extension if possible using parameter expansion (e.g., `${{file##*.}}`). Place output files in the `{current_directory}` unless the user specifies otherwise.
+5.  **Overwrite Confirmation (`-y` flag - CRITICAL):** **ALWAYS** include the `-y` flag at the end of the FFmpeg command (inside the loop if applicable) to automatically overwrite output files.
+6.  **Trimming (IMPORTANT):** Use the `-t <duration>` output option: `-ss 0 -i <input> -t <duration> ... <output> -y`. Optionally add `-c copy`. **Avoid using only video filters like `-vf trim` for duration limiting.**
+7.  **Quoting:** Crucial for filenames, paths, filter arguments, *especially* within shell loops and `sh -c '...'` contexts. Double-check escaping if needed.
+8.  **Safety:** No malicious/destructive commands. If unsafe/impossible, set "command" to "" and explain.
+9.  **Clarity:** Explain all parts of the command/loop.
+10. **Error Handling:** If given a previous error (like "no matches found" or FFmpeg errors), analyze it and provide a corrected command/loop. If "no matches found", fix the file pattern (case, path) or use `nullglob`.
+
+"""
+
+    def __init__(self, model: str = "gpt-4o-mini", temperature: float = 0.1, max_retries: int = 3):
+        # No load_dotenv here anymore
+        self.model = model
         self.temperature = temperature
+        self.max_retries = max_retries # Max retries for API calls, not command execution
 
     def clean_json_response(self, response_str: str) -> str:
+        """
+        Cleans common markdown formatting issues around JSON responses from LLMs.
+        Attempts to extract the outermost JSON object. Robustly handles variations.
+        """
+        if not isinstance(response_str, str):
+             logging.warning(f"clean_json_response received non-string input: {type(response_str)}")
+             return "" # Return empty string for non-string input
+
         response_str = response_str.strip()
-        if response_str.startswith("```") and response_str.endswith("```"):
-            lines = response_str.splitlines()
-            if len(lines) >= 3:
-                response_str = "\n".join(lines[1:-1])
-            else:
-                response_str = response_str.strip("```")
+
+        # 1. Remove markdown code blocks (```json ... ``` or ``` ... ```)
+        match = re.match(r"^\s*```(?:json)?\s*(.*)\s*```\s*$", response_str, re.DOTALL | re.IGNORECASE)
+        if match:
+             response_str = match.group(1).strip()
+
+        # 2. Find the first '{' and the last '}' to define the JSON boundaries
         try:
-            start = response_str.index("{")
-            end = response_str.rindex("}") + 1
-            response_str = response_str[start:end]
+            start_index = response_str.index("{")
+            end_index = response_str.rindex("}") + 1
+            response_str = response_str[start_index:end_index]
         except ValueError:
-            pass
+            # If no '{' or '}' found, it's likely not JSON.
+            logging.warning("Could not find JSON object boundaries '{...}' in LLM response after cleaning markdown.")
+            # Let's check if it *might* be valid JSON without braces (unlikely for object)
+            # but return the cleaned string for now, parsing will fail later if needed.
+            return response_str # Return stripped string, parse attempt will clarify
+
+        # 3. Optional: Further checks/cleaning if needed (e.g., removing trailing commas - complex)
+        # For now, rely on json.loads to validate
+
         return response_str
 
-    def generate_command(self, user_query: str, error_message: str = None) -> str:
-        target_size = extract_target_file_size(user_query)
-        if target_size:
-            user_query += f"\nEnsure the output file is no larger than {target_size} bytes."
-        elif needs_compression(user_query):
-            user_query += "\nEnsure that the output file is compressed (i.e., smaller than the input file)."
+    def generate_command(self, conversation_history: List[Dict[str, str]], system_context: Dict[str, str]) -> str:
+        """
+        Generates the FFmpeg command using the LLM, incorporating context and conversation history.
+        """
+        # Format the file context message for the system prompt
+        file_context_str = "\nFILE CONTEXT:\n"
+        explicit_file = system_context.get("explicit_input_file")
+        detected_files = system_context.get("detected_files_in_directory")
+        cwd = system_context.get("current_directory", ".") # Get CWD for context message
 
-        if error_message:
-            user_query += f"\nThe previous command failed with this error:\n{error_message}\nTry another approach."
-        response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": self.SYSTEM_PROMPT},
-                {"role": "user", "content": user_query}
-            ],
-            temperature=self.temperature
-        )
-        return response.choices[0].message.content
+        if explicit_file:
+            file_context_str += f"- Explicit input file provided: '{explicit_file}' (Use this exact path)\n"
+        if detected_files:
+            # Use relative paths if possible for brevity in prompt
+            relative_files_for_prompt = []
+            for f_abs in detected_files:
+                 try:
+                     rel_path = os.path.relpath(f_abs, cwd)
+                     # Prefer relative path if it's simpler and doesn't go up many levels
+                     if len(rel_path) < len(f_abs) and '../' not in rel_path[3:]: # Heuristic
+                         relative_files_for_prompt.append(rel_path)
+                     else:
+                         relative_files_for_prompt.append(f_abs)
+                 except ValueError: # Files on different drives (Windows)
+                     relative_files_for_prompt.append(f_abs)
 
-    def fix_command_quotes(self, command: str) -> str:
-        pattern = r'(-vf\s+)(["\'])(.*?)\2'
-        match = re.search(pattern, command)
-        if match:
-            prefix = match.group(1)
-            filters = match.group(3)
-            filters_fixed = re.sub(
-                r'scale\s*=\s*min\(([^)]+)\)',
-                lambda m: "scale='min({})'".format(m.group(1)),
-                filters,
-                flags=re.IGNORECASE
+            files_list_str = ", ".join([f"'{f}'" for f in relative_files_for_prompt])
+            # Include CWD in message for clarity
+            file_context_str += f"- Media files found in directory '{cwd}': {files_list_str}\n"
+            # Clarify that absolute paths should be used in commands if needed
+            file_context_str += f"- Note: In the generated command, use full absolute paths for these files where necessary (e.g., '{detected_files[0]}' ...).\n"
+
+        # Add the summary message if it exists and provides unique info
+        summary_msg = system_context.get("file_context_message","")
+        # Check if the summary is already covered by the explicit/detected file lines
+        if summary_msg and not explicit_file and not detected_files:
+             file_context_str += f"- Additional context: {summary_msg}\n"
+        elif not explicit_file and not detected_files:
+             # Be explicit about CWD here too
+             file_context_str += f"- No specific input file provided or common media files detected in the directory '{cwd}'.\n"
+
+        # Construct the final system prompt
+        try:
+            formatted_system_prompt = self.SYSTEM_PROMPT_TEMPLATE.format(
+                os_info=system_context.get('os_info', 'Unknown'),
+                os_type=system_context.get('os_type', 'Unknown'),
+                shell=system_context.get('shell', 'Unknown'),
+                ffmpeg_version=system_context.get('ffmpeg_version', 'Unknown'),
+                ffmpeg_executable_path=system_context.get('ffmpeg_executable_path', 'ffmpeg'),
+                current_directory=cwd, # Pass CWD here
+                file_context=file_context_str
             )
-            filters_fixed = filters_fixed.replace('"', '')
-            new_vf = prefix + '"' + filters_fixed + '"'
-            command = re.sub(pattern, new_vf, command, count=1)
-        return command
+        except KeyError as e:
+             logging.error(f"Missing key in system_context for prompt formatting: {e}")
+             raise ValueError(f"System context dictionary is missing required key: {e}") from e
 
-    def replace_placeholder_with_file(self, command: str, actual_file: str) -> str:
-        import shlex
-        try:
-            tokens = shlex.split(command)
-        except Exception:
-            tokens = command.split()
-        new_tokens = []
-        found_input = False
-        i = 0
-        while i < len(tokens):
-            if tokens[i].lower() == "-i":
-                if not found_input:
-                    found_input = True
-                    new_tokens.append(tokens[i])
-                    if i + 1 < len(tokens):
-                        new_tokens.append(actual_file)
-                    i += 2
-                else:
-                    # Skip any additional "-i" and its argument.
-                    i += 2
-            else:
-                new_tokens.append(tokens[i])
-                i += 1
-        try:
-            new_command = shlex.join(new_tokens)
-        except AttributeError:
-            new_command = ' '.join(shlex.quote(token) for token in new_tokens)
-        return new_command
+        messages = [{"role": "system", "content": formatted_system_prompt}]
+        # Filter out empty user messages if any crept in
+        valid_history = [msg for msg in conversation_history if msg.get("content")]
+        messages.extend(valid_history) # Add user prompts, assistant responses, errors etc.
 
-    def update_output_filename(self, command: str, input_file: str, desired_ext: str = None) -> str:
-        import os
-        from file_manager import IMAGE_EXTENSIONS
+        logging.debug(f"Sending messages to LLM: {json.dumps(messages, indent=2)}")
+
+        # Make the API call
         try:
-            tokens = shlex.split(command)
-        except Exception:
-            tokens = command.split()
-        if len(tokens) < 3:
-            return command
-        output_token = tokens[-1]
-        _, out_ext = os.path.splitext(output_token)
-        _, in_ext = os.path.splitext(input_file)
-        if desired_ext:
-            out_ext = desired_ext
-        else:
-            if in_ext.lower() in IMAGE_EXTENSIONS:
-                out_ext = in_ext
-        base, _ = os.path.splitext(os.path.basename(input_file))
-        new_output = f"{base}_toasted{out_ext}"
-        tokens[-1] = new_output
-        try:
-            new_command = shlex.join(tokens)
-        except AttributeError:
-            new_command = ' '.join(shlex.quote(token) for token in tokens)
-        return new_command
+            response = openai.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                response_format={"type": "json_object"} # Request JSON output
+            )
+            content = response.choices[0].message.content
+            logging.debug(f"LLM raw choice content: {content}")
+            # Check for potential refusals or empty content
+            if not content:
+                 logging.warning("LLM returned empty content.")
+                 # Return structure indicating failure
+                 return json.dumps({"explanation": ["LLM returned empty content."], "command": ""})
+
+            return content
+
+        except openai.APIConnectionError as e: logging.error(f"OpenAI API connection error: {e}"); raise
+        except openai.RateLimitError as e: logging.error(f"OpenAI API rate limit exceeded: {e}"); raise
+        except openai.AuthenticationError as e: logging.error(f"OpenAI API authentication error (invalid key?): {e}"); raise
+        except openai.PermissionDeniedError as e: logging.error(f"OpenAI API permission denied error: {e}"); raise
+        except openai.APIStatusError as e: logging.error(f"OpenAI API status error: {e.status_code} - {e.response}"); raise
+        except Exception as e: logging.error(f"Error during OpenAI API call: {e}", exc_info=True); raise

@@ -3,12 +3,70 @@ import argparse
 import logging
 import sys
 import json
-import shlex
-import re
+import subprocess
+import platform
+import shutil
+import os
+from pathlib import Path
+from typing import Tuple, Optional
+from dotenv import load_dotenv
 
-from file_manager import FileManager, VIDEO_EXTENSIONS
-from command_generator import CommandGenerator
-from command_executor import CommandExecutor
+# --- Determine paths ---
+# Get the path of the script file, resolving symlinks
+try:
+    # Resolve symlinks to get the *actual* file path
+    REAL_SCRIPT_FILE = os.path.realpath(__file__)
+except NameError:
+    # __file__ might not be defined if running interactively or packaged weirdly
+    REAL_SCRIPT_FILE = os.path.abspath(sys.argv[0]) # Fallback using argv
+
+SCRIPT_DIR = os.path.dirname(REAL_SCRIPT_FILE) # Directory of the real script file
+CURRENT_WORKDIR = os.getcwd()
+USER_HOME = Path.home()
+USER_CONFIG_DIR = USER_HOME / ".config" / "toast" # Standard XDG base dir location
+USER_CONFIG_DOTENV = USER_CONFIG_DIR / ".env"
+# *** Define .env path relative to the *real* script directory ***
+SCRIPT_DIR_DOTENV = Path(SCRIPT_DIR) / ".env"
+
+# --- Setup Logging Early ---
+# Use basicConfig for initial setup before main() is called
+# Configure logging (important for seeing debug messages)
+# Use a basic formatter initially, will be updated in main if verbose
+logging.basicConfig(
+    level=logging.INFO, # Default to INFO
+    format="[%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logging.info(f"--- Initializing Toast ---")
+
+# --- Ensure modules in SCRIPT_DIR are importable ---
+# This helps if the script is run directly or symlinked,
+# maybe less so if installed via setup.py's entry_points.
+if SCRIPT_DIR not in sys.path:
+     # Insert at the beginning to prioritize modules next to the real script
+     sys.path.insert(0, SCRIPT_DIR)
+     logging.debug(f"Inserted script directory into sys.path: {SCRIPT_DIR}")
+
+try:
+    # *** Import constants directly from file_manager ***
+    from file_manager import (
+        FileManager,
+        VIDEO_EXTENSIONS,
+        IMAGE_EXTENSIONS,
+        AUDIO_EXTENSIONS
+    )
+    from command_generator import CommandGenerator
+    from command_executor import CommandExecutor
+    logging.debug("Helper modules and constants imported successfully.")
+except ImportError as e:
+    # Log error using the configured logger
+    logging.error(f"Failed to import required modules/constants.")
+    logging.error(f"        Real Script Directory: {SCRIPT_DIR}")
+    logging.error(f"        Current sys.path: {sys.path}")
+    logging.error(f"        Ensure file_manager.py (with constants defined), command_generator.py, command_executor.py")
+    logging.error(f"        are in the script directory or installed correctly.")
+    logging.exception("Import Error details:") # Logs the full traceback
+    sys.exit(1)
 
 def print_art():
     art = r"""
@@ -21,7 +79,7 @@ def print_art():
 ⠀⠀⠀⠀⠀⠀⠀⣠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣦⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀
 ⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀
-⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠛⠿⣿⡇⠀⠀
+⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠛⠿⣿⇇⠀⠀
 ⠀⠀⠀⠀⠀⠀⠸⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠏⢠⣾⣿⣦⠘⠇⠀⠀
 ⠀⠀⢀⣤⡀⠀⢰⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣆⠘⢿⣿⠟⢠⡆⠀⠀
 ⠀⠀⠘⠛⠛⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣤⣤⣶⣿⡇⠀⠀
@@ -30,181 +88,311 @@ def print_art():
 """
     print(art)
 
+
+# --- System Info Gathering ---
+def get_ffmpeg_executable() -> str:
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path is None: raise FileNotFoundError("Missing ffmpeg executable.")
+    return ffmpeg_path
+def get_ffmpeg_version(ffmpeg_exe: str) -> str:
+    try: result = subprocess.run([ffmpeg_exe, "-version"], capture_output=True, text=True, check=False, timeout=5); output = result.stdout if "ffmpeg version" in result.stdout.lower() else result.stderr; first_line = output.splitlines()[0].strip() if output and output.splitlines() else "Could not determine version"; return first_line if "version" in first_line.lower() else output
+    except Exception as e: logging.warning(f"Could not get ffmpeg version: {e}"); return "Unknown"
+def get_os_info() -> Tuple[str, str]:
+    os_type = platform.system(); return os_type, f"{os_type} {platform.release()} {platform.machine()}"
+def get_default_shell() -> Optional[str]:
+     shell = os.getenv("SHELL")
+     if shell: return shell
+     # Basic platform specific fallbacks
+     if platform.system() == "Windows": return os.getenv("COMSPEC", "cmd.exe")
+     if platform.system() in ["Linux", "Darwin"]:
+         if os.path.exists('/bin/bash'): return '/bin/bash'
+         if os.path.exists('/bin/sh'): return '/bin/sh'
+     return None
+
+# --- Main Execution Logic ---
 def main():
     parser = argparse.ArgumentParser(
-        description="pixl-toastr: Natural language FFmpeg command generator."
+        description="toast: Natural language FFmpeg command generator."
     )
     parser.add_argument("query", nargs="+", help="Your natural language prompt for FFmpeg.")
     parser.add_argument("--dry-run", action="store_true", help="Show the generated command without executing it.")
     parser.add_argument("--file", type=str, help="Specify an input file explicitly.")
-    parser.add_argument("--confirm", action="store_true", help="Ask for confirmation before executing the command.")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output.")
     args = parser.parse_args()
 
-    # Configure logging with a timestamp.
+    # Reconfigure logging level if verbose AFTER parsing args
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s - %(levelname)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
+    logging.getLogger().setLevel(log_level) # Update root logger level
 
-    # Instantiate helper classes.
-    file_manager = FileManager()
+    # Log paths again now that logging level is set correctly
+    logging.debug(f"Verbose logging enabled.")
+    logging.debug(f"(DEBUG) Real Script File: {REAL_SCRIPT_FILE}")
+    logging.debug(f"(DEBUG) Real Script Directory: {SCRIPT_DIR}")
+    logging.debug(f"(DEBUG) Current Working Directory: {CURRENT_WORKDIR}")
+    logging.debug(f"(DEBUG) User Config Dir target: {USER_CONFIG_DIR}")
+    # Log the result of the dotenv loading attempt from the main block
+    logging.debug(f"(DEBUG) Dotenv search path 1 (User Config): {os.environ.get('TOAST_DOTENV_USER_PATH', 'N/A')}")
+    logging.debug(f"(DEBUG) Dotenv search path 2 (Script Dir): {os.environ.get('TOAST_DOTENV_SCRIPT_PATH', 'N/A')}")
+    logging.debug(f"(DEBUG) Dotenv loaded successfully from: {os.environ.get('TOAST_DOTENV_LOADED_FROM', 'Not loaded')}")
+
+    # --- Gather System and File Context ---
+    try:
+        ffmpeg_executable = get_ffmpeg_executable()
+        ffmpeg_version = get_ffmpeg_version(ffmpeg_executable)
+        os_type, os_info = get_os_info()
+        default_shell = get_default_shell() or "Not detected"
+    except FileNotFoundError as e:
+        logging.error(f"Initialization failed: {e}")
+        sys.exit(1)
+    except Exception as e:
+        logging.warning(f"Could not gather some system info: {e}", exc_info=args.verbose) # Show traceback if verbose
+        ffmpeg_executable = "ffmpeg"; ffmpeg_version = "Unknown"
+        os_type, os_info = "Unknown", "Unknown"; default_shell = "Unknown"
+
+    system_context = {
+        "os_type": os_type, "os_info": os_info, "shell": default_shell,
+        "ffmpeg_version": ffmpeg_version, "ffmpeg_executable_path": ffmpeg_executable,
+        "current_directory": CURRENT_WORKDIR,
+    }
+
+    # --- File Context ---
+    file_manager = FileManager(directory=CURRENT_WORKDIR) # Operate relative to CWD
+    user_query_str = " ".join(args.query)
+    explicit_file_path = None
+    if args.file:
+         # Ensure path is absolute for clarity
+         explicit_file_path = os.path.abspath(args.file) if not os.path.isabs(args.file) else args.file
+    else:
+         # extract_explicit_filename should ideally return abs path or None
+         explicit_file_path = file_manager.extract_explicit_filename(user_query_str)
+
+    file_context_message = "" # Initialize
+    if explicit_file_path:
+        if os.path.isfile(explicit_file_path):
+             system_context["explicit_input_file"] = explicit_file_path
+             file_context_message = f"An explicit input file was provided: '{explicit_file_path}'. Please ensure the command uses this exact path."
+             logging.info(f"Using explicit file: {explicit_file_path}")
+        else:
+             logging.warning(f"Explicitly specified file not found: {explicit_file_path}")
+             file_context_message = f"User tried to specify a file '{args.file or 'in query'}' which resolved to '{explicit_file_path}', but it was not found. Inform the user if a file is needed."
+    else:
+        # List files logic (returns absolute paths)
+        # *** Use directly imported constants ***
+        all_media_extensions = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS | AUDIO_EXTENSIONS
+        found_files = file_manager.list_files(all_media_extensions)
+        if found_files:
+             max_files_to_list = 15
+             files_to_mention_abs = found_files[:max_files_to_list]
+             # Try to get relative paths for display/prompt context if simple
+             relative_files = []
+             for f_abs in files_to_mention_abs:
+                 try: rel_path = os.path.relpath(f_abs, CURRENT_WORKDIR); relative_files.append(rel_path)
+                 except ValueError: relative_files.append(f_abs) # Different drive etc.
+
+             system_context["detected_files_in_directory"] = files_to_mention_abs # Store absolute paths
+             file_list_str = ", ".join([f"'{f}'" for f in relative_files])
+             message = f"Found these media files in the current directory ({CURRENT_WORKDIR}): {file_list_str}."
+             if len(found_files) > max_files_to_list: message += f" (and {len(found_files) - max_files_to_list} more...)"
+             file_context_message = message
+             logging.info(f"Found media files (showing relative paths if possible): {', '.join(relative_files)}")
+             logging.debug(f"Absolute paths of found files: {', '.join(files_to_mention_abs)}")
+        else:
+             file_context_message = f"No common media files detected in the current directory ({CURRENT_WORKDIR})."
+             logging.info(f"No relevant media files detected in the current directory ({CURRENT_WORKDIR}).")
+
+    system_context["file_context_message"] = file_context_message
+
+    # --- Instantiate Core Components ---
     command_generator = CommandGenerator()
     command_executor = CommandExecutor()
 
-    user_query = " ".join(args.query)
-    logging.info("Interpreting your request: %s", user_query)
+    # --- Interaction Loop ---
+    conversation_history = []
+    current_user_prompt = user_query_str
+    max_clarification_attempts = 3
+    attempts = 0
+    logging.info("Starting interaction loop...")
+    while attempts < max_clarification_attempts:
+         attempts += 1
+         logging.info(f"--- Attempt #{attempts} ---")
+         if not current_user_prompt and not conversation_history: logging.error("Initial query is empty."); break
+         if current_user_prompt: conversation_history.append({"role": "user", "content": current_user_prompt})
 
-    # --- Conversion Request Detection ---
-    desired_output_ext = None
-    lower_query = user_query.lower()
+         try:
+             raw_response = command_generator.generate_command(conversation_history, system_context)
+             logging.debug(f"LLM raw response: {raw_response}")
+             cleaned_json = command_generator.clean_json_response(raw_response)
+             logging.debug(f"LLM cleaned response: {cleaned_json}")
 
-    # Priority: detect conversion to GIF.
-    if re.search(r'\bto\s+(?:a\s+)?gif\b', lower_query):
-        desired_output_ext = ".gif"
-        logging.info("Detected conversion request: output to .gif")
-    # Detect image conversion requests like "convert the image files to jpg"
-    elif re.search(r'convert\s+(?:the\s+)?image\s+files?\s+to\s+(\w+)', lower_query):
-        match = re.search(r'convert\s+(?:the\s+)?image\s+files?\s+to\s+(\w+)', lower_query)
-        dst_ext = match.group(1)
-        desired_output_ext = f".{dst_ext}"
-        logging.info(f"Detected conversion request: image files to {desired_output_ext}")
-    else:
-        # Existing conversion detection (e.g. "convert all mp4 files to mov")
-        conv_match = re.search(r'convert\s+all\s+(\w+)\s+files?\s+to\s+(\w+)', lower_query)
-        if conv_match:
-            src_ext, dst_ext = conv_match.groups()
-            desired_output_ext = f".{dst_ext}"
-            logging.info(f"Detected conversion request: from .{src_ext} to {desired_output_ext}")
+             try:
+                parsed_response = json.loads(cleaned_json)
+                explanation_data = parsed_response.get("explanation", "No explanation provided.")
+                command_to_execute = parsed_response.get("command", "").strip()
+                conversation_history.append({"role": "assistant", "content": cleaned_json})
+             except json.JSONDecodeError as e:
+                logging.error(f"Failed to parse JSON response from LLM: {e}")
+                logging.error(f"Raw response was: {raw_response}")
+                current_user_prompt = f"The previous response was not valid JSON. Please provide the response strictly in the required JSON format.\nPrevious invalid response:\n{raw_response}"
+                if conversation_history and conversation_history[-1]["role"] == "user": conversation_history.pop()
+                continue # Retry generation
 
-    # --- Trim Duration Extraction ---
-    trim_duration = None
-    trim_match = re.search(r'trim.*?(\d+)\s*sec', lower_query)
-    if trim_match:
-        trim_duration = trim_match.group(1)
-        logging.info(f"Detected trim duration: {trim_duration} seconds")
+             if not command_to_execute:
+                 logging.warning("LLM did not provide a command.")
+                 # Print explanation / refusal reason
+                 print("\nExplanation / Response:")
+                 if isinstance(explanation_data, list): print("- " + "\n- ".join(explanation_data))
+                 else: print(f"- {explanation_data}")
+                 print("\nCannot proceed without a command.")
+                 break # Exit loop
 
-    # --- File Handling ---
-    detected_file = None
-    if args.file:
-        logging.info(f"Using explicit file: {args.file}")
-        detected_file = args.file
-        user_query += f"\n(Use the file '{args.file}' as input.)"
-    else:
-        ext_set, explicit_file = file_manager.analyze_prompt_for_filetype(user_query)
-        if explicit_file:
-            logging.info(f"Found explicit file in query: {explicit_file}")
-            detected_file = explicit_file
-        elif ext_set is not None:
-            found_file = file_manager.detect_single_file(ext_set)
-            if found_file:
-                logging.info(f"Found a single matching file: {found_file}")
-                detected_file = found_file
-                user_query += f"\n(We found a single file named '{found_file}' in the directory. Please use that as input.)"
-            else:
-                files = file_manager.list_files(ext_set)
-                if files:
-                    logging.info(f"Found multiple matching files: {', '.join(files)}")
-                    file_list_str = ", ".join(files)
-                    user_query += f"\n(Found these files in the directory: {file_list_str}. Please use all of them as inputs.)"
-                    detected_file = files
+             print("\nExplanation:")
+             if isinstance(explanation_data, list): print("- " + "\n- ".join(explanation_data))
+             else: print(f"- {explanation_data}")
+             print(f"\nProposed Command:\n\t{command_to_execute}\n")
 
-        # --- Fuzzy and Normalized Matching Fallbacks ---
-        if not detected_file:
-            fuzzy_file = file_manager.fuzzy_match_filename(user_query)
-            if fuzzy_file:
-                logging.info(f"Fuzzy matched file: {fuzzy_file}")
-                detected_file = fuzzy_file
-                user_query += f"\n(Using fuzzy matched file '{fuzzy_file}' as input.)"
-        if not detected_file:
-            norm_file = file_manager.normalized_match_filename(user_query)
-            if norm_file:
-                logging.info(f"Normalized matched file: {norm_file}")
-                detected_file = norm_file
-                user_query += f"\n(Using normalized matched file '{norm_file}' as input.)"
+             if args.dry_run: logging.info("Dry-run mode enabled."); break
 
-    # --- Command Generation with Retries ---
-    attempt = 0
-    error_message = None
-    ffmpeg_command = None
+             # Confirmation Prompt
+             user_input = input("Execute? ([Y]es / [N]o / [C]larify): ").strip().lower()
 
-    while attempt < command_generator.max_retries:
-        attempt += 1
-        logging.info(f"--- Attempt #{attempt} ---")
-        raw_response = command_generator.generate_command(user_query, error_message)
-        logging.debug(f"LLM raw response: {raw_response}")
-        cleaned_json = command_generator.clean_json_response(raw_response)
-        logging.debug(f"LLM cleaned response: {cleaned_json}")
+             if user_input in ["y", "yes", ""]:
+                 success, output = command_executor.execute_with_retries(command_to_execute)
+                 if success:
+                     logging.info("Command executed successfully!")
+                     if output: logging.debug(f"Command output:\n{output}")
+                     print_art(); break # Success!
+                 else:
+                     logging.error("Command execution failed.")
+                     error_output_for_llm = output if output else "Command failed with no specific output."
+                     logging.error(f"Failure Output:\n{error_output_for_llm}")
+                     current_user_prompt = f"The last command attempt failed:\nCommand: `{command_to_execute}`\nError Output:\n```\n{error_output_for_llm}\n```\nPlease analyze the error and the original request history to provide a corrected command."
+                     continue # Retry generation
+             elif user_input in ["n", "no"]: logging.info("Execution cancelled."); break
+             elif user_input in ["c", "clarify"]:
+                 clarification = input("Please provide clarification or correction: ").strip()
+                 if clarification: current_user_prompt = clarification; continue
+                 else: logging.warning("No clarification provided."); break
+             else:
+                 if user_input:
+                     logging.info("Treating input as clarification.")
+                     current_user_prompt = user_input; continue
+                 else: logging.warning("Invalid input."); break # Treat empty invalid input as abort
 
-        try:
-            parsed = json.loads(cleaned_json)
-            ffmpeg_command = parsed.get("command", "").strip()
-        except Exception as e:
-            logging.error("Failed to parse JSON response from LLM.")
-            error_message = f"JSON parse error: {e}. Original response: {raw_response}"
-            continue
+         # Need to check specific API errors if using openai directly
+         except openai.APIError as e:
+             logging.error(f"OpenAI API error: {e}", exc_info=args.verbose)
+             if conversation_history and conversation_history[-1]["role"] == "user": conversation_history.pop()
+             print("Error communicating with the LLM API. Check connection/key/quota.", file=sys.stderr); break
+         except Exception as e:
+             logging.exception("An unexpected error occurred in the main loop:") # Log full traceback
+             if conversation_history and conversation_history[-1]["role"] == "user": conversation_history.pop()
+             print("An unexpected error occurred. Aborting.", file=sys.stderr); break
 
-        if not ffmpeg_command or not ffmpeg_command.startswith("ffmpeg"):
-            logging.error("Invalid command received from LLM:")
-            logging.error(cleaned_json)
-            error_message = f"Invalid command: {cleaned_json}"
-            continue
-
-        # --- Adjust the Command Based on the File(s) ---
-        if detected_file:
-            if isinstance(detected_file, str):
-                ffmpeg_command = command_generator.replace_placeholder_with_file(ffmpeg_command, detected_file)
-                ffmpeg_command = command_generator.update_output_filename(ffmpeg_command, detected_file, desired_ext=desired_output_ext)
-            elif isinstance(detected_file, list):
-                if any(keyword in user_query.lower() for keyword in ["rotate", "trim", "compress", "convert"]):
-                    if "trim" in user_query.lower():
-                        duration = trim_duration if trim_duration is not None else "5"
-                        for f in detected_file:
-                            import os, shlex
-                            _, ext = os.path.splitext(f)
-                            if ext.lower() in VIDEO_EXTENSIONS:
-                                base = os.path.splitext(f)[0]
-                                out_ext = desired_output_ext if desired_output_ext and desired_output_ext != ext.lower() else ext
-                                output_name = f"{base}_toasted{out_ext}"
-                                if desired_output_ext and desired_output_ext != ext.lower():
-                                    cmd = f"ffmpeg -i {shlex.quote(f)} -t {duration} {shlex.quote(output_name)}"
-                                else:
-                                    cmd = f"ffmpeg -i {shlex.quote(f)} -t {duration} -c copy {shlex.quote(output_name)}"
-                                logging.info(f"Executing trim command for video file {f}: {cmd}")
-                                success, output = command_executor.execute_with_retries(cmd, args.confirm, args.dry_run)
-                                if not success:
-                                    logging.error(f"Command failed for {f}: {output}")
-                            else:
-                                logging.info(f"Skipping file {f} as it is not recognized as a video for trimming.")
-                        print_art()
-                        sys.exit(0)
-                    for f in detected_file:
-                        per_file_cmd = command_generator.replace_placeholder_with_file(ffmpeg_command, f)
-                        per_file_cmd = command_generator.update_output_filename(per_file_cmd, f, desired_ext=desired_output_ext)
-                        logging.info(f"Executing command for file {f}: {per_file_cmd}")
-                        success, output = command_executor.execute_with_retries(per_file_cmd, args.confirm, args.dry_run)
-                        if not success:
-                            logging.error(f"Command failed for {f}: {output}")
-                    print_art()
-                    sys.exit(0)
-        ffmpeg_command = command_generator.fix_command_quotes(ffmpeg_command)
-        logging.info(f"Proposed command: {ffmpeg_command}")
-
-        # --- Execute the Command ---
-        success, output = command_executor.execute_with_retries(ffmpeg_command, args.confirm, args.dry_run)
-        if success:
-            logging.info("Command executed successfully!")
-            logging.debug(f"Command output: {output}")
-            print_art()
-            sys.exit(0)
-        else:
-            logging.error("Command execution failed, retrying...")
-            error_message = output
-
-    logging.error("Maximum retries exceeded. Exiting with error.")
-    sys.exit(1)
+    if attempts >= max_clarification_attempts:
+        logging.warning("Maximum clarification or retry attempts reached. Exiting.")
+    logging.info("Toast finished.")
+    sys.exit(0)
 
 if __name__ == "__main__":
-    main()
+    # --- Load .env file with Priority Order ---
+    api_key = os.getenv("OPENAI_API_KEY")
+    loaded_from = None
+    dotenv_loaded = False # Track if any dotenv load succeeded
+
+    # 1. Check Environment Variable FIRST
+    if api_key:
+        logging.info("Found OPENAI_API_KEY in environment variables.")
+        loaded_from = "Environment Variable"
+    else:
+        logging.info("OPENAI_API_KEY not found in environment variables.")
+        # 2. Try User Config Dir (~/.config/toast/.env)
+        logging.info(f"Looking for .env file in user config: {USER_CONFIG_DOTENV}")
+        os.environ['TOAST_DOTENV_USER_PATH'] = str(USER_CONFIG_DOTENV) # For logging in main()
+        if USER_CONFIG_DOTENV.is_file():
+            logging.info(f"Found user config .env file. Attempting to load.")
+            try:
+                # Pass stream explicitly if verbose logging is needed from dotenv
+                dotenv_loaded = load_dotenv(dotenv_path=USER_CONFIG_DOTENV, verbose=True, override=True)
+                api_key = os.getenv("OPENAI_API_KEY") # Check again after loading
+                if api_key and dotenv_loaded:
+                     loaded_from = str(USER_CONFIG_DOTENV)
+                     logging.info(f"Successfully loaded OPENAI_API_KEY from user config.")
+                elif dotenv_loaded:
+                     logging.warning(f"Loaded {USER_CONFIG_DOTENV}, but key still not found in env.")
+                else:
+                     logging.warning(f"Found {USER_CONFIG_DOTENV}, but load_dotenv() returned False.")
+            except Exception as e:
+                logging.warning(f"Error loading {USER_CONFIG_DOTENV}: {e}", exc_info=True)
+        else:
+             logging.info(f"User config .env file not found.")
+
+        # 3. Try **Real** Script Directory (Development/Symlink Fallback) ONLY if not loaded yet
+        if not api_key:
+             # *** Use SCRIPT_DIR_DOTENV which is based on REAL_SCRIPT_FILE ***
+             logging.info(f"Looking for .env file in real script directory: {SCRIPT_DIR_DOTENV}")
+             os.environ['TOAST_DOTENV_SCRIPT_PATH'] = str(SCRIPT_DIR_DOTENV) # For logging in main()
+             if SCRIPT_DIR_DOTENV.is_file():
+                 logging.info(f"Found real script directory .env file. Attempting to load.")
+                 try:
+                     dotenv_loaded = load_dotenv(dotenv_path=SCRIPT_DIR_DOTENV, verbose=True, override=True)
+                     api_key = os.getenv("OPENAI_API_KEY") # Check again
+                     if api_key and dotenv_loaded:
+                         loaded_from = str(SCRIPT_DIR_DOTENV)
+                         logging.info(f"Successfully loaded OPENAI_API_KEY from real script directory.")
+                     elif dotenv_loaded:
+                         logging.warning(f"Loaded {SCRIPT_DIR_DOTENV}, but key still not found in env.")
+                     else:
+                         logging.warning(f"Found {SCRIPT_DIR_DOTENV}, but load_dotenv() returned False.")
+                 except Exception as e:
+                      logging.warning(f"Error loading {SCRIPT_DIR_DOTENV}: {e}", exc_info=True)
+
+             else:
+                 logging.info(f"Real script directory .env file not found.")
+
+    # --- Final Check for API Key ---
+    if not api_key:
+        # Print error to stderr for visibility even if logging isn't working fully
+        eprint = lambda *a, **k: print(*a, file=sys.stderr, **k)
+        eprint(f"\n[ERROR] OPENAI_API_KEY could not be found.")
+        eprint(f"        Search Order:")
+        eprint(f"        1. Environment Variable 'OPENAI_API_KEY'")
+        eprint(f"        2. User Config File: {USER_CONFIG_DOTENV}")
+        eprint(f"        3. Real Script Directory File: {SCRIPT_DIR_DOTENV} (resolves symlinks)")
+        eprint(f"\n        Recommendation: Set the OPENAI_API_KEY environment variable globally,")
+        eprint(f"        or create the user config directory ({USER_CONFIG_DIR})")
+        eprint(f"        and place your .env file inside it.")
+        sys.exit(1)
+    else:
+        masked_key = api_key[:4] + "..." + api_key[-4:]
+        logging.info(f"OpenAI API Key loaded successfully (masked: {masked_key}) from: {loaded_from if loaded_from else 'Unknown Source'}")
+        os.environ['TOAST_DOTENV_LOADED_FROM'] = loaded_from if loaded_from else "Not loaded via dotenv"
+
+    # --- Import and Configure OpenAI Library ---
+    try:
+        # *** Import openai here, AFTER key is confirmed loaded ***
+        import openai
+        # Ensure the key is actually set for the library if loaded via dotenv
+        # The library should pick it up from os.environ automatically, but explicit doesn't hurt
+        openai.api_key = api_key
+        logging.info("OpenAI library imported and API key configured.")
+    except ImportError:
+        logging.error("'openai' library not installed. Please install it using 'pip install openai'.", exc_info=True)
+        sys.exit(1)
+    except Exception as e:
+        logging.exception("Error configuring OpenAI library:")
+        sys.exit(1)
+
+    # --- Run Main Application ---
+    logging.info("Starting main application logic...")
+    # Wrap main call in try/except for final catch-all
+    try:
+        main()
+    except SystemExit as e:
+         # Let SystemExit pass through (used for clean exits)
+         raise e
+    except KeyboardInterrupt:
+         print("\n[INFO] Execution interrupted by user.", file=sys.stderr)
+         sys.exit(130) # Standard exit code for Ctrl+C
+    except Exception as e:
+         logging.exception("An unhandled exception occurred in main:")
+         sys.exit(1) # General error exit code
