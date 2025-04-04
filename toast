@@ -68,26 +68,33 @@ except ImportError as e:
     logging.exception("Import Error details:") # Logs the full traceback
     sys.exit(1)
 
+# --- Import openai here, AFTER potential error exit ---
+# The actual configuration happens later after key check
+try:
+    import openai
+except ImportError:
+    logging.error("'openai' library not installed. Please install it using 'pip install openai'.", exc_info=True)
+    sys.exit(1)
+
 def print_art():
     art = r"""
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣄⠀⠀⠀⢀⡀⠀⠀⠀⣀⡀⠀⠀⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢰⣟⠁⠀⠀⣴⡏⠁⠀⠀⣾⡋⠁⠀⠀⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠿⠄⠀⠈⠻⠷⠀⠀⠈⢹⣷⠀⠀⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣤⣤⣤⣤⣤⣤⣤⣤⣤⣀⠀⠠⣤⣀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⣹⣿⡿⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⣹⣿⡿⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠛⠛⠀⠛⠛⠛⠛⠉⠛⠛⠛⠀⠐⠛⠛⠀⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⣠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣦⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀
 ⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀
-⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠛⠿⣿⇇⠀⠀
-⠀⠀⠀⠀⠀⠀⠸⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠏⢠⣾⣿⣦⠘⠇⠀⠀
-⠀⠀⢀⣤⡀⠀⢰⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣆⠘⢿⣿⠟⢠⡆⠀⠀
+⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠛⠿⣿⡇⠀⠀
+⠀⠀⠀⠀⠀⠀⠸⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠏⢠⣾⣿⣦⠘⠇⠀⠀
+⠀⠀⢀⣤⡀⠀⢰⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣆⠘⢿⣿⠟⢠⡆⠀⠀
 ⠀⠀⠘⠛⠛⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣤⣤⣶⣿⡇⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⢠⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣄⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠘⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠛⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠘⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠛⠀⠀⠀⠀⠀⠀
 """
     print(art)
-
 
 # --- System Info Gathering ---
 def get_ffmpeg_executable() -> str:
@@ -208,34 +215,50 @@ def main():
 
     # --- Interaction Loop ---
     conversation_history = []
+    # Initialize with the first user prompt
     current_user_prompt = user_query_str
-    max_clarification_attempts = 3
+    max_retry_attempts = 3 # Renamed from clarification attempts
     attempts = 0
-    logging.info("Starting interaction loop...")
-    while attempts < max_clarification_attempts:
+    logging.info("Starting command generation and execution loop...")
+
+    while attempts < max_retry_attempts:
          attempts += 1
          logging.info(f"--- Attempt #{attempts} ---")
-         if not current_user_prompt and not conversation_history: logging.error("Initial query is empty."); break
-         if current_user_prompt: conversation_history.append({"role": "user", "content": current_user_prompt})
+
+         # Ensure there's a prompt to send, add it to history
+         if not current_user_prompt:
+             logging.error("No user prompt available for this attempt. This shouldn't happen.")
+             break
+         if not conversation_history or conversation_history[-1].get("content") != current_user_prompt:
+             conversation_history.append({"role": "user", "content": current_user_prompt})
+         # Clear current_user_prompt after adding to history so it's not accidentally reused if LLM fails before setting a new one
+         current_user_prompt = None
 
          try:
+             # --- 1. Generate Command ---
              raw_response = command_generator.generate_command(conversation_history, system_context)
              logging.debug(f"LLM raw response: {raw_response}")
              cleaned_json = command_generator.clean_json_response(raw_response)
              logging.debug(f"LLM cleaned response: {cleaned_json}")
 
+             # --- 2. Parse Response ---
              try:
-                parsed_response = json.loads(cleaned_json)
-                explanation_data = parsed_response.get("explanation", "No explanation provided.")
-                command_to_execute = parsed_response.get("command", "").strip()
-                conversation_history.append({"role": "assistant", "content": cleaned_json})
+                 parsed_response = json.loads(cleaned_json)
+                 explanation_data = parsed_response.get("explanation", "No explanation provided.")
+                 command_to_execute = parsed_response.get("command", "").strip()
+                 # Add assistant's response (the structured JSON) to history
+                 conversation_history.append({"role": "assistant", "content": cleaned_json})
              except json.JSONDecodeError as e:
-                logging.error(f"Failed to parse JSON response from LLM: {e}")
-                logging.error(f"Raw response was: {raw_response}")
-                current_user_prompt = f"The previous response was not valid JSON. Please provide the response strictly in the required JSON format.\nPrevious invalid response:\n{raw_response}"
-                if conversation_history and conversation_history[-1]["role"] == "user": conversation_history.pop()
-                continue # Retry generation
+                 logging.error(f"Failed to parse JSON response from LLM: {e}")
+                 logging.error(f"Raw response was: {raw_response}")
+                 # Prepare prompt for LLM to fix its JSON
+                 current_user_prompt = f"The previous response was not valid JSON. Please provide the response strictly in the required JSON format.\nPrevious invalid response:\n{raw_response}"
+                 # Remove the failed user prompt if it was the last entry to avoid duplication
+                 if conversation_history and conversation_history[-1]["role"] == "user":
+                     conversation_history.pop()
+                 continue # Retry generation
 
+             # --- 3. Handle Cases Without a Command ---
              if not command_to_execute:
                  logging.warning("LLM did not provide a command.")
                  # Print explanation / refusal reason
@@ -243,55 +266,88 @@ def main():
                  if isinstance(explanation_data, list): print("- " + "\n- ".join(explanation_data))
                  else: print(f"- {explanation_data}")
                  print("\nCannot proceed without a command.")
-                 break # Exit loop
+                 break # Exit loop, cannot execute or retry without a command
 
+             # --- 4. Display Information ---
              print("\nExplanation:")
              if isinstance(explanation_data, list): print("- " + "\n- ".join(explanation_data))
              else: print(f"- {explanation_data}")
              print(f"\nProposed Command:\n\t{command_to_execute}\n")
 
-             if args.dry_run: logging.info("Dry-run mode enabled."); break
+             # --- 5. Handle Dry Run ---
+             if args.dry_run:
+                 logging.info("Dry-run mode enabled. Command not executed.")
+                 print("[Dry Run] Command generated but not executed.")
+                 break # Exit loop successfully after showing command
 
-             # Confirmation Prompt
-             user_input = input("Execute? ([Y]es / [N]o / [C]larify): ").strip().lower()
+             # --- 6. Execute Command ---
+             print("Executing command...")
+             logging.info(f"Executing command: {command_to_execute}")
+             success, output = command_executor.execute_with_retries(command_to_execute) # Using simple execute now
 
-             if user_input in ["y", "yes", ""]:
-                 success, output = command_executor.execute_with_retries(command_to_execute)
-                 if success:
-                     logging.info("Command executed successfully!")
-                     if output: logging.debug(f"Command output:\n{output}")
-                     print_art(); break # Success!
-                 else:
-                     logging.error("Command execution failed.")
-                     error_output_for_llm = output if output else "Command failed with no specific output."
-                     logging.error(f"Failure Output:\n{error_output_for_llm}")
-                     current_user_prompt = f"The last command attempt failed:\nCommand: `{command_to_execute}`\nError Output:\n```\n{error_output_for_llm}\n```\nPlease analyze the error and the original request history to provide a corrected command."
-                     continue # Retry generation
-             elif user_input in ["n", "no"]: logging.info("Execution cancelled."); break
-             elif user_input in ["c", "clarify"]:
-                 clarification = input("Please provide clarification or correction: ").strip()
-                 if clarification: current_user_prompt = clarification; continue
-                 else: logging.warning("No clarification provided."); break
+             # --- 7. Handle Execution Result ---
+             if success:
+                 logging.info("Command executed successfully!")
+                 if output:
+                     logging.debug(f"Command output:\n{output}")
+                     print(f"Output:\n{output}") # Show output to user on success too
+                 print_art()
+                 break # Success! Exit the loop.
              else:
-                 if user_input:
-                     logging.info("Treating input as clarification.")
-                     current_user_prompt = user_input; continue
-                 else: logging.warning("Invalid input."); break # Treat empty invalid input as abort
+                 # Execution failed, prepare for LLM retry
+                 logging.error("Command execution failed.")
+                 error_output_for_llm = output if output else "Command failed with no specific output."
+                 logging.error(f"Failure Output:\n{error_output_for_llm}")
+                 print(f"\n[ERROR] Command failed:\n{error_output_for_llm}\n")
+                 print("Asking the LLM to retry based on the error...")
+                 # Prepare the next user prompt with error context
+                 current_user_prompt = f"The last command attempt failed:\nCommand: `{command_to_execute}`\nError Output:\n```\n{error_output_for_llm}\n```\nPlease analyze the error and the original request history to provide a corrected command."
+                 # Remove the assistant's failed command response from history before adding the new user error prompt
+                 if conversation_history and conversation_history[-1]["role"] == "assistant":
+                    conversation_history.pop()
+                 continue # Go to the next iteration of the while loop to retry with the LLM
 
-         # Need to check specific API errors if using openai directly
+         # --- Error Handling for LLM Interaction ---
          except openai.APIError as e:
              logging.error(f"OpenAI API error: {e}", exc_info=args.verbose)
-             if conversation_history and conversation_history[-1]["role"] == "user": conversation_history.pop()
-             print("Error communicating with the LLM API. Check connection/key/quota.", file=sys.stderr); break
+             # Remove the potentially problematic user prompt if it was the last entry
+             if conversation_history and conversation_history[-1]["role"] == "user":
+                 conversation_history.pop()
+             print(f"Error communicating with the LLM API: {e}. Check connection/key/quota.", file=sys.stderr)
+             break # Exit loop on API errors
          except Exception as e:
              logging.exception("An unexpected error occurred in the main loop:") # Log full traceback
-             if conversation_history and conversation_history[-1]["role"] == "user": conversation_history.pop()
-             print("An unexpected error occurred. Aborting.", file=sys.stderr); break
+             # Remove the potentially problematic user prompt if it was the last entry
+             if conversation_history and conversation_history[-1]["role"] == "user":
+                 conversation_history.pop()
+             print(f"An unexpected error occurred: {e}. Aborting.", file=sys.stderr)
+             break # Exit loop on other unexpected errors
 
-    if attempts >= max_clarification_attempts:
-        logging.warning("Maximum clarification or retry attempts reached. Exiting.")
+    # --- Loop Exit Conditions ---
+    if attempts >= max_retry_attempts and current_user_prompt:
+        # This condition means the loop finished because it hit max attempts *after* a failure
+        logging.warning("Maximum retry attempts reached after command failure. Exiting.")
+        print("\nMaximum retry attempts reached. The command could not be successfully executed.")
+    elif not current_user_prompt and attempts >= max_retry_attempts:
+         # This means loop finished due to max attempts, but last action wasn't necessarily a failure reported to user
+         logging.warning("Maximum attempts reached (possibly during JSON parsing or initial generation). Exiting.")
+         print("\nMaximum attempts reached. Could not successfully generate and execute the command.")
+
     logging.info("Toast finished.")
-    sys.exit(0)
+    # Determine exit code: 0 for success (or dry run), 1 for failure
+    # Success is indicated by breaking the loop *before* hitting max attempts AND not due to error/no command.
+    # We can check if the loop completed normally (i.e., hit the `break` after success or dry run)
+    # A simple way: assume failure if we exited the loop due to attempt limit or caught exception.
+    # Check if the loop was broken internally (success/dry-run/no-command/api-error) vs finishing all attempts after failure.
+    # We already broke on success/dry-run/etc. So if we are here and attempts >= max_retry_attempts, it's likely a failure chain.
+    # If current_user_prompt is set, it means the last step was preparing for a retry that didn't happen.
+    exit_code = 0 if not current_user_prompt and attempts < max_retry_attempts else 1
+    # Refine: If dry run, always exit 0 if loop finished or broke due to dry run.
+    if args.dry_run and (attempts < max_retry_attempts or not command_to_execute): # Check if dry run break happened or LLM didn't give command
+        exit_code = 0
+    # If success break happened (print_art was called), exit code should be 0. This is implicitly handled.
+
+    sys.exit(exit_code)
 
 if __name__ == "__main__":
     # --- Load .env file with Priority Order ---
@@ -312,7 +368,7 @@ if __name__ == "__main__":
             logging.info(f"Found user config .env file. Attempting to load.")
             try:
                 # Pass stream explicitly if verbose logging is needed from dotenv
-                dotenv_loaded = load_dotenv(dotenv_path=USER_CONFIG_DOTENV, verbose=True, override=True)
+                dotenv_loaded = load_dotenv(dotenv_path=USER_CONFIG_DOTENV, verbose=logging.getLogger().isEnabledFor(logging.DEBUG), override=True)
                 api_key = os.getenv("OPENAI_API_KEY") # Check again after loading
                 if api_key and dotenv_loaded:
                      loaded_from = str(USER_CONFIG_DOTENV)
@@ -334,7 +390,7 @@ if __name__ == "__main__":
              if SCRIPT_DIR_DOTENV.is_file():
                  logging.info(f"Found real script directory .env file. Attempting to load.")
                  try:
-                     dotenv_loaded = load_dotenv(dotenv_path=SCRIPT_DIR_DOTENV, verbose=True, override=True)
+                     dotenv_loaded = load_dotenv(dotenv_path=SCRIPT_DIR_DOTENV, verbose=logging.getLogger().isEnabledFor(logging.DEBUG), override=True)
                      api_key = os.getenv("OPENAI_API_KEY") # Check again
                      if api_key and dotenv_loaded:
                          loaded_from = str(SCRIPT_DIR_DOTENV)
@@ -367,18 +423,15 @@ if __name__ == "__main__":
         logging.info(f"OpenAI API Key loaded successfully (masked: {masked_key}) from: {loaded_from if loaded_from else 'Unknown Source'}")
         os.environ['TOAST_DOTENV_LOADED_FROM'] = loaded_from if loaded_from else "Not loaded via dotenv"
 
-    # --- Import and Configure OpenAI Library ---
+    # --- Configure OpenAI Library ---
     try:
-        # *** Import openai here, AFTER key is confirmed loaded ***
-        import openai
         # Ensure the key is actually set for the library if loaded via dotenv
         # The library should pick it up from os.environ automatically, but explicit doesn't hurt
         openai.api_key = api_key
         logging.info("OpenAI library imported and API key configured.")
-    except ImportError:
-        logging.error("'openai' library not installed. Please install it using 'pip install openai'.", exc_info=True)
-        sys.exit(1)
     except Exception as e:
+        # This catch block might be redundant if the import itself fails earlier,
+        # but kept for safety in case configuration itself throws an error.
         logging.exception("Error configuring OpenAI library:")
         sys.exit(1)
 
@@ -388,11 +441,11 @@ if __name__ == "__main__":
     try:
         main()
     except SystemExit as e:
-         # Let SystemExit pass through (used for clean exits)
-         raise e
+         # Let SystemExit pass through (used for clean exits with specific codes)
+         sys.exit(e.code) # Ensure the exit code from main() is propagated
     except KeyboardInterrupt:
          print("\n[INFO] Execution interrupted by user.", file=sys.stderr)
          sys.exit(130) # Standard exit code for Ctrl+C
     except Exception as e:
-         logging.exception("An unhandled exception occurred in main:")
+         logging.exception("An unhandled exception occurred outside the main loop:")
          sys.exit(1) # General error exit code
