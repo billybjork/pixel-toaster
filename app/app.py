@@ -4,10 +4,8 @@ import sys
 import json
 import os
 import shutil
-from typing import Dict, Any # Keep Dict, Any
+from typing import Dict, Any
 
-# Assume config_manager is available via `app.config_manager` if needed,
-# but config data is PASSED IN now.
 from .file_manager import (
     FileManager,
     VIDEO_EXTENSIONS,
@@ -17,11 +15,8 @@ from .file_manager import (
 from .command_generator import CommandGenerator
 from .command_executor import CommandExecutor
 from . import utils
-import openai # Keep for specific error types
+import openai
 
-# No need for CURRENT_WORKDIR global here; get it dynamically if needed inside the function.
-
-# **** MODIFIED FUNCTION SIGNATURE ****
 def run_toast_app(args: argparse.Namespace, config: Dict[str, Any]) -> int:
     """
     Runs the main logic of the Toast application.
@@ -140,7 +135,6 @@ def run_toast_app(args: argparse.Namespace, config: Dict[str, Any]) -> int:
         return 1
 
     # --- Interaction Loop ---
-    # (Keep the loop logic mostly the same as before)
     conversation_history = []
     current_user_prompt = user_query_str
     max_retry_attempts = 3
