@@ -1,6 +1,6 @@
 # pixel-toaster
 
-Say goodbye to memorizing complex FFmpeg flags or copying and pasting commands from ChatGPT! Just tell `pixel-toaster` what you want to do.
+Say goodbye to memorizing complex FFmpeg flags or copying and pasting commands from ChatGPT! Just tell `toast` what you want to do.
 
 **pixel-toaster** is a command-line tool that performs media conversions and manipulations using natural language prompts. It leverages the power of LLMs to translate your requests into FFmpeg commands, executes them, and even attempts to automatically fix errors by feeding them back to the LLM.
 
@@ -14,7 +14,7 @@ Say goodbye to memorizing complex FFmpeg flags or copying and pasting commands f
 - **Context-Aware** – Provides the LLM with context about your OS, shell, FFmpeg version, and files in the current directory for better results.
 - **File Detection** – Automatically detects common video, image, and audio files to help with batch processing.
 - **Batch Processing** – Generates shell loops (e.g., `for file in *.mp4; do ... done`) when your prompt implies multiple files.
-- **Error Handling & Retry** – If an FFmpeg command fails, `pixel-toaster` captures the error and asks the LLM to correct it.
+- **Error Handling & Retry** – If an FFmpeg command fails, `toast` captures the error and asks the LLM to correct it.
 - **Managed Configuration** – Interactive setup for your API key; stored in `~/.config/pixel-toaster/config.json` (or XDG-compliant path).
 - **Dry Run Mode** – Use `--dry-run` to preview commands without running them.
 - **Explicit File Input** – Use `--file` to specify a particular input file.
