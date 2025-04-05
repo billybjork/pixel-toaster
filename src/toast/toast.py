@@ -10,6 +10,15 @@ import os
 from pathlib import Path
 from typing import Tuple, Optional
 from dotenv import load_dotenv
+from file_manager import (
+    FileManager,
+    VIDEO_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    AUDIO_EXTENSIONS
+)
+from command_generator import CommandGenerator
+from command_executor import CommandExecutor
+import openai
 
 # --- Determine paths ---
 # Get the path of the script file, resolving symlinks
@@ -20,6 +29,7 @@ except NameError:
     # __file__ might not be defined if running interactively or packaged weirdly
     REAL_SCRIPT_FILE = os.path.abspath(sys.argv[0]) # Fallback using argv
 
+# TODO: a lot of this is going to instead come from your ~/.toast_bjork
 SCRIPT_DIR = os.path.dirname(REAL_SCRIPT_FILE) # Directory of the real script file
 CURRENT_WORKDIR = os.getcwd()
 USER_HOME = Path.home()
@@ -47,35 +57,7 @@ if SCRIPT_DIR not in sys.path:
      sys.path.insert(0, SCRIPT_DIR)
      logging.debug(f"Inserted script directory into sys.path: {SCRIPT_DIR}")
 
-try:
-    # *** Import constants directly from file_manager ***
-    from file_manager import (
-        FileManager,
-        VIDEO_EXTENSIONS,
-        IMAGE_EXTENSIONS,
-        AUDIO_EXTENSIONS
-    )
-    from command_generator import CommandGenerator
-    from command_executor import CommandExecutor
-    logging.debug("Helper modules and constants imported successfully.")
-except ImportError as e:
-    # Log error using the configured logger
-    logging.error(f"Failed to import required modules/constants.")
-    logging.error(f"        Real Script Directory: {SCRIPT_DIR}")
-    logging.error(f"        Current sys.path: {sys.path}")
-    logging.error(f"        Ensure file_manager.py (with constants defined), command_generator.py, command_executor.py")
-    logging.error(f"        are in the script directory or installed correctly.")
-    logging.exception("Import Error details:") # Logs the full traceback
-    sys.exit(1)
-
-# --- Import openai here, AFTER potential error exit ---
-# The actual configuration happens later after key check
-try:
-    import openai
-except ImportError:
-    logging.error("'openai' library not installed. Please install it using 'pip install openai'.", exc_info=True)
-    sys.exit(1)
-
+# TODO: move this to `utils.py`
 def print_art():
     art = r"""
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣄⠀⠀⠀⢀⡀⠀⠀⠀⣀⡀⠀⠀⠀⠀⠀⠀
@@ -96,16 +78,22 @@ def print_art():
 """
     print(art)
 
+# TODO: move this to its own loader class
+
 # --- System Info Gathering ---
 def get_ffmpeg_executable() -> str:
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path is None: raise FileNotFoundError("Missing ffmpeg executable.")
     return ffmpeg_path
+# TODO: let these functions breath, eg put space between beginning and end.
+# TODO: use a linter if you don't already, it should catch this
 def get_ffmpeg_version(ffmpeg_exe: str) -> str:
     try: result = subprocess.run([ffmpeg_exe, "-version"], capture_output=True, text=True, check=False, timeout=5); output = result.stdout if "ffmpeg version" in result.stdout.lower() else result.stderr; first_line = output.splitlines()[0].strip() if output and output.splitlines() else "Could not determine version"; return first_line if "version" in first_line.lower() else output
     except Exception as e: logging.warning(f"Could not get ffmpeg version: {e}"); return "Unknown"
 def get_os_info() -> Tuple[str, str]:
     os_type = platform.system(); return os_type, f"{os_type} {platform.release()} {platform.machine()}"
+
+# TODO: cleaner way to do this
 def get_default_shell() -> Optional[str]:
      shell = os.getenv("SHELL")
      if shell: return shell
@@ -117,6 +105,7 @@ def get_default_shell() -> Optional[str]:
      return None
 
 # --- Main Execution Logic ---
+# TODO: main.py instead of here, and keep the logic in it as light as possible
 def main():
     parser = argparse.ArgumentParser(
         description="toast: Natural language FFmpeg command generator."
@@ -152,6 +141,10 @@ def main():
         logging.error(f"Initialization failed: {e}")
         sys.exit(1)
     except Exception as e:
+        # TODO: update all your logging like this, also make an alias from logging to log
+        # so you can just do log.warning, insterad of logging
+        # logging.warning(",... %s ", args.verbose)
+        # logging.warning("Could not gather some system info: %s", args.verbose) # Show traceback if verbose
         logging.warning(f"Could not gather some system info: {e}", exc_info=args.verbose) # Show traceback if verbose
         ffmpeg_executable = "ffmpeg"; ffmpeg_version = "Unknown"
         os_type, os_info = "Unknown", "Unknown"; default_shell = "Unknown"
@@ -408,6 +401,7 @@ if __name__ == "__main__":
     # --- Final Check for API Key ---
     if not api_key:
         # Print error to stderr for visibility even if logging isn't working fully
+        # TODO: use a differnet more structured logger
         eprint = lambda *a, **k: print(*a, file=sys.stderr, **k)
         eprint(f"\n[ERROR] OPENAI_API_KEY could not be found.")
         eprint(f"        Search Order:")

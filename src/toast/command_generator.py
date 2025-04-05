@@ -5,6 +5,7 @@ import logging
 import openai
 from typing import List, Dict, Optional
 
+# TODO Put this command into its own text file
 class CommandGenerator:
     # --- Enhanced System Prompt ---
     SYSTEM_PROMPT_TEMPLATE = """\
@@ -84,10 +85,12 @@ COMMAND GENERATION RULES:
 
         return response_str
 
+    # TODO: no need to use `List`, you can just use list, same with dict
     def generate_command(self, conversation_history: List[Dict[str, str]], system_context: Dict[str, str]) -> str:
         """
         Generates the FFmpeg command using the LLM, incorporating context and conversation history.
         """
+        # TODO try to break down this funtion a bit more
         # Format the file context message for the system prompt
         file_context_str = "\nFILE CONTEXT:\n"
         explicit_file = system_context.get("explicit_input_file")
@@ -108,6 +111,7 @@ COMMAND GENERATION RULES:
                      else:
                          relative_files_for_prompt.append(f_abs)
                  except ValueError: # Files on different drives (Windows)
+                     # TODO: are you sure you want to do this here vs fail?
                      relative_files_for_prompt.append(f_abs)
 
             files_list_str = ", ".join([f"'{f}'" for f in relative_files_for_prompt])
@@ -165,6 +169,8 @@ COMMAND GENERATION RULES:
 
             return content
 
+        # TODO: Put this not here  but in the root of toast.py, have something that catches all error types. Makes this 
+        # part of your code much cleaner, and common of repos to put all error handling into general place for python
         except openai.APIConnectionError as e: logging.error(f"OpenAI API connection error: {e}"); raise
         except openai.RateLimitError as e: logging.error(f"OpenAI API rate limit exceeded: {e}"); raise
         except openai.AuthenticationError as e: logging.error(f"OpenAI API authentication error (invalid key?): {e}"); raise
