@@ -2,7 +2,6 @@ import argparse
 import logging
 import sys
 import os
-import shutil
 from pathlib import Path
 from typing import Optional, List
 from dotenv import load_dotenv
@@ -191,7 +190,6 @@ def main(sys_args: List[str]):
     log.debug(f"(DEBUG) Dotenv loaded successfully from: {os.environ.get('TOAST_DOTENV_LOADED_FROM', 'Not loaded')}")
     log.debug(f"Parsed arguments: {args}")
 
-
     # --- Run the Core Application Logic ---
     # Pass the parsed args to the application runner function (imported from app.app)
     log.info("Handing control to the application runner...")
@@ -199,7 +197,6 @@ def main(sys_args: List[str]):
     exit_code = toast_app_module.run_toast_app(args)
     log.info(f"Application runner finished with exit code {exit_code}.")
     return exit_code
-
 
 # --- Script Execution Guard ---
 if __name__ == "__main__":

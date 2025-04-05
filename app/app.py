@@ -3,20 +3,19 @@ import logging
 import sys
 import json
 import os
-import shutil # Keep shutil import if get_ffmpeg_executable uses it directly
+import shutil
 from typing import Dict, Any
 
-# Import local modules and utilities using relative imports
-from .file_manager import ( # <<< Relative import
+from .file_manager import (
     FileManager,
     VIDEO_EXTENSIONS,
     IMAGE_EXTENSIONS,
     AUDIO_EXTENSIONS
 )
-from .command_generator import CommandGenerator # <<< Relative import
-from .command_executor import CommandExecutor # <<< Relative import
-from . import utils  # Import the utils module relatively # <<< Relative import
-import openai # Needed for specific error handling (external, no change)
+from .command_generator import CommandGenerator
+from .command_executor import CommandExecutor
+from . import utils
+import openai
 
 # Assume these constants are available from the entry point's setup
 # We might need to pass them if they aren't global or easily recalculated
@@ -68,7 +67,6 @@ def run_toast_app(args: argparse.Namespace) -> int:
     logging.debug(f"System Context: {system_context}")
 
     # --- File Context ---
-    # Use FileManager imported relatively
     file_manager = FileManager(directory=CURRENT_WORKDIR) # Operate relative to CWD
     user_query_str = " ".join(args.query)
     explicit_file_path = None
@@ -131,7 +129,6 @@ def run_toast_app(args: argparse.Namespace) -> int:
     system_context["file_context_message"] = file_context_message
     logging.debug(f"File Context Message for LLM: {file_context_message}")
 
-
     # --- Instantiate Core Components ---
     try:
         # Use CommandGenerator and CommandExecutor imported relatively
@@ -168,7 +165,6 @@ def run_toast_app(args: argparse.Namespace) -> int:
         current_user_prompt = None
         # Reset command tracker for this attempt
         last_generated_command = ""
-
 
         try:
             # --- 1. Generate Command ---
@@ -262,7 +258,6 @@ def run_toast_app(args: argparse.Namespace) -> int:
                      success = False
                      # Break explicitly here, the loop condition will also catch it
                      break
-
 
         # --- Error Handling for LLM Interaction (API errors, etc.) ---
         except openai.APIError as e:
