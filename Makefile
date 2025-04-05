@@ -76,8 +76,8 @@ release-gh: build
 	 echo "4. Push the tag: git push origin $$VERSION" ;\
 	 git push origin $$VERSION ;\
 	 echo "5. Create GitHub release and upload asset:" ;\
-	 echo "   gh release create $$VERSION $(DIST_DIR)/$(APP_NAME)* --notes \"Release notes for $$VERSION\" --title \"Pixel Toaster $$VERSION\"" ;\
-	 gh release create $$VERSION $(DIST_DIR)/$(APP_NAME)* --notes "Release notes for $$VERSION" --title "Pixel Toaster $$VERSION"
+	 echo "   gh release create $$VERSION $(DIST_DIR)/$(APP_NAME) --notes \"Release notes for $$VERSION\" --title \"Pixel Toaster $$VERSION\"" ;\
+	 gh release create $$VERSION $(DIST_DIR)/$(APP_NAME) --notes "Release notes for $$VERSION" --title "Pixel Toaster $$VERSION"
 
 # Show help message
 help:
