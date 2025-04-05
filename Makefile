@@ -9,6 +9,11 @@ MAIN_SCRIPT = main.py
 APP_NAME = toast # Desired name for the binary
 DIST_DIR = dist
 BUILD_DIR = build
+# Define the data file source relative to this Makefile (project root)
+DATA_FILE_SOURCE = app/system_prompt.txt
+# Define where the data file should go *inside* the bundle
+# Since command_generator.py is in 'app', place the data file there too.
+DATA_FILE_DEST = app
 
 # Default target (runs when you just type 'make')
 all: help
@@ -46,14 +51,15 @@ check: lint
 # --distpath: Where to put the final executable
 # --workpath: Where PyInstaller does its work
 # --clean: Remove PyInstaller cache before building
-# Add --add-data if you have non-code files to bundle (e.g., assets)
-# Example: --add-data "path/to/asset.txt:."
+# --add-data: Bundle non-code files. Format is "Source:Destination" (macOS/Linux) or "Source;Destination" (Windows).
+#             Destination is relative to the bundle's root directory.
 build: clean
 	@echo ">>> Building executable binary..."
 	$(PYTHON) -m PyInstaller --name $(APP_NAME) \
 	                        --onefile \
 	                        --distpath $(DIST_DIR) \
 	                        --workpath $(BUILD_DIR) \
+	                        --add-data "$(DATA_FILE_SOURCE):$(DATA_FILE_DEST)" \
 	                        --clean \
 	                        $(MAIN_SCRIPT)
 	@echo ">>> Build complete. Executable is in $(DIST_DIR)/"
@@ -86,7 +92,7 @@ help:
 	@echo "  lint          Run linters and type checker"
 	@echo "  format        Auto-format code using black and isort"
 	@echo "  check         Run lint and format checks (useful for CI)"
-	@echo "  build         Build the executable binary in ./dist/"
+	@echo "  build         Build the executable binary in ./dist/, including system_prompt.txt"
 	@echo "  clean         Remove build artifacts and caches"
 	@echo "  release-gh    Build, tag, push tag, and create GitHub release with assets (requires 'gh' CLI)"
 	@echo "  help          Show this help message"

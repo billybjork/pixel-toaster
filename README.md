@@ -103,6 +103,11 @@ You might see a warning the first time you run `toast`. To allow it:
 
 You only need to do this once per version.
 
+You will also need to make the command executable:
+```bash
+   chmod +x /usr/local/bin/toast
+```
+
 ---
 
 ## Configuration (First Run)
