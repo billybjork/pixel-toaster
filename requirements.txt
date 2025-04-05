@@ -1,0 +1,10 @@
+# requirements.txt
+openai
+
+# Development/Build tools
+pyinstaller
+flake8
+black
+isort
+mypy
+types-requests
