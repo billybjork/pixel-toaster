@@ -1,9 +1,11 @@
 import os
 import json
-import logging
+import logging as log
 import getpass
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+VERBOSE = False  # Global verbosity flag for conditional traceback logging
 
 # Follow XDG Base Directory Specification for user-specific config
 # https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
@@ -15,18 +17,18 @@ else:
     CONFIG_DIR = Path.home() / ".config" / "pixel-toaster"
 
 CONFIG_FILE_PATH = CONFIG_DIR / "config.json"
-LOG_FILE_PATH = CONFIG_DIR / "toast.log" # Centralized log file location
+LOG_FILE_PATH = CONFIG_DIR / "toast.log"  # Centralized log file location
 
 DEFAULT_CONFIG = {
     "openai_api_key": None,
-    "llm_model": "gpt-4o-mini", # Default model
+    "llm_model": "gpt-4o-mini",  # Default model
     "log_level": "INFO",
     "log_to_file": True,
     # Add other future config options here with defaults
     # e.g., "default_output_dir": null, "command_history_limit": 50
 }
 
-log = logging.getLogger(__name__) # Use module-specific logger
+log = log.getLogger(__name__)  # Use module-specific logger
 
 def load_config() -> Dict[str, Any]:
     """
@@ -47,21 +49,21 @@ def load_config() -> Dict[str, Any]:
             if not config.get("openai_api_key"):
                 log.warning(f"OpenAI API key missing in config file: {CONFIG_FILE_PATH}")
                 print(f"[WARNING] OpenAI API key not found in {CONFIG_FILE_PATH}.")
-                return initialize_config() # Re-initialize if key is missing
+                return initialize_config()  # Re-initialize if key is missing
 
             log.info(f"Configuration loaded successfully from {CONFIG_FILE_PATH}")
             return config
 
         except json.JSONDecodeError:
-            log.error(f"Invalid JSON format in config file: {CONFIG_FILE_PATH}", exc_info=True)
+            log.error(f"Invalid JSON format in config file: {CONFIG_FILE_PATH}", exc_info=VERBOSE)
             print(f"[ERROR] Corrupted configuration file found at {CONFIG_FILE_PATH}.")
             print("Please fix or delete the file and run again.")
             # Optionally: backup the corrupted file before prompting initialization
             # shutil.move(CONFIG_FILE_PATH, f"{CONFIG_FILE_PATH}.corrupted_{int(time.time())}")
             # return initialize_config() # Or force exit
-            raise SystemExit(1) # Exit if config is corrupted
+            raise SystemExit(1)  # Exit if config is corrupted
         except Exception as e:
-            log.error(f"Error loading config file {CONFIG_FILE_PATH}: {e}", exc_info=True)
+            log.error(f"Error loading config file {CONFIG_FILE_PATH}: {e}", exc_info=VERBOSE)
             print(f"[ERROR] Could not read configuration file: {e}")
             raise SystemExit(1)
     else:
@@ -81,9 +83,9 @@ def initialize_config() -> Dict[str, Any]:
     while not api_key:
         # Use getpass for secure input (doesn't echo to terminal)
         api_key = getpass.getpass("Please enter your OpenAI API Key (starts with 'sk-'): ")
-        if not api_key.startswith("sk-") or len(api_key) < 50: # Basic validation
+        if not api_key.startswith("sk-") or len(api_key) < 50:  # Basic validation
             print("[ERROR] Invalid API Key format. Please ensure it starts with 'sk-' and is complete.")
-            api_key = None # Force retry
+            api_key = None  # Force retry
 
     # Create the config dictionary
     new_config = DEFAULT_CONFIG.copy()
@@ -95,7 +97,7 @@ def initialize_config() -> Dict[str, Any]:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         log.info(f"Created configuration directory: {CONFIG_DIR}")
     except OSError as e:
-        log.error(f"Failed to create configuration directory {CONFIG_DIR}: {e}", exc_info=True)
+        log.error(f"Failed to create configuration directory {CONFIG_DIR}: {e}", exc_info=VERBOSE)
         print(f"[ERROR] Could not create configuration directory: {e}")
         raise SystemExit(1)
 
@@ -109,7 +111,7 @@ def initialize_config() -> Dict[str, Any]:
         print("Configuration saved successfully.")
         return new_config
     except IOError as e:
-        log.error(f"Failed to save configuration file {CONFIG_FILE_PATH}: {e}", exc_info=True)
+        log.error(f"Failed to save configuration file {CONFIG_FILE_PATH}: {e}", exc_info=VERBOSE)
         print(f"[ERROR] Could not write configuration file: {e}")
         raise SystemExit(1)
 
@@ -118,8 +120,8 @@ def get_config_value(key: str, default: Optional[Any] = None) -> Any:
     # This assumes config is loaded once at startup.
     # For more dynamic needs, you might reload or pass the config dict around.
     try:
-        config = load_config() # Simple approach: load each time needed (cached if module loaded)
+        config = load_config()  # Simple approach: load each time needed (cached if module loaded)
         return config.get(key, default)
     except Exception:
-        log.error(f"Failed to load config to get key '{key}'. Returning default.")
+        log.error(f"Failed to load config to get key '{key}'. Returning default.", exc_info=VERBOSE)
         return default

@@ -1,6 +1,6 @@
 import os
 import re
-import logging
+import logging as log
 from typing import List, Optional, Set
 
 # Supported file extensions
@@ -15,10 +15,11 @@ ALL_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS | AUDIO_EXTENSIONS
 ext_pattern = '|'.join(re.escape(ext.lstrip('.')) for ext in ALL_EXTENSIONS)
 
 class FileManager:
-    def __init__(self, directory: str = "."):
+    def __init__(self, directory: str = ".", verbose: bool = False):
         self.directory = os.path.abspath(directory)  # Use absolute path
+        self.verbose = verbose
         if not os.path.isdir(self.directory):
-            logging.warning(f"Target directory does not exist: {self.directory}. File listing might be empty.")
+            log.warning(f"Target directory does not exist: {self.directory}. File listing might be empty.")
 
     def extract_explicit_filename(self, user_query: str) -> Optional[str]:
         """
@@ -36,7 +37,7 @@ class FileManager:
             if os.path.isfile(potential_file):
                 return potential_file  # Return full path
             else:
-                logging.debug(f"Found quoted potential filename '{potential_filename}' in query, but it doesn't exist locally.")
+                log.debug(f"Found quoted potential filename '{potential_filename}' in query, but it doesn't exist locally.")
 
         # Regex to find unquoted filenames (more restrictive characters)
         unquoted_pattern = rf'\b([a-zA-Z0-9_.-]+\.({ext_pattern}))\b'
@@ -47,21 +48,25 @@ class FileManager:
                 potential_file = os.path.join(self.directory, fname)
                 if os.path.isfile(potential_file):
                     return potential_file  # Return full path
-            logging.debug(f"Found unquoted potential filenames {[match[0] for match in unquoted_matches]} in query, but none exist locally.")
+            log.debug(f"Found unquoted potential filenames {[match[0] for match in unquoted_matches]} in query, but none exist locally.")
 
         # Basic check: if a token *exactly* matches an existing file (case-insensitive)
         tokens = re.findall(r'\b[\w.-]{3,}\b', user_query)  # Find words >= 3 chars
         try:
-            local_files = {f.lower(): f for f in os.listdir(self.directory) if os.path.isfile(os.path.join(self.directory, f))}
+            local_files = {
+                f.lower(): f
+                for f in os.listdir(self.directory)
+                if os.path.isfile(os.path.join(self.directory, f))
+            }
             for token in tokens:
                 if token.lower() in local_files:
                     _, ext = os.path.splitext(local_files[token.lower()])
                     if ext.lower() in ALL_EXTENSIONS:
                         return os.path.join(self.directory, local_files[token.lower()])  # Return full path
         except FileNotFoundError:
-            logging.warning(f"Directory not found when checking tokens: {self.directory}")
+            log.warning(f"Directory not found when checking tokens: {self.directory}", exc_info=self.verbose)
         except Exception as e:
-            logging.error(f"Error during token matching: {e}")
+            log.error(f"Error during token matching: {e}", exc_info=self.verbose)
 
         return None  # No explicit file found and verified
 
@@ -79,7 +84,7 @@ class FileManager:
                     if ext.lower() in exts:
                         matches.append(full_path)  # Append full path
         except FileNotFoundError:
-            logging.warning(f"Directory not found for listing files: {self.directory}")
+            log.warning(f"Directory not found for listing files: {self.directory}", exc_info=self.verbose)
         except Exception as e:
-            logging.error(f"Error listing files in {self.directory}: {e}")
+            log.error(f"Error listing files in {self.directory}: {e}", exc_info=self.verbose)
         return matches
