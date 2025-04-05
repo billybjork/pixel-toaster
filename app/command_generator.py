@@ -5,10 +5,11 @@ import logging
 import openai
 from typing import List, Dict, Optional
 
+log = logging.getLogger(__name__) # Use module-specific logger
+
 class CommandGenerator:
-    # --- Enhanced System Prompt ---
     SYSTEM_PROMPT_TEMPLATE = """\
-    
+
 You are an expert assistant specialized in generating FFmpeg commands based on user requests.
 Your goal is to provide a single, correct, and safe FFmpeg command or shell loop.
 
@@ -45,19 +46,32 @@ COMMAND GENERATION RULES:
 
 """
 
-    def __init__(self, model: str = "gpt-4o-mini", temperature: float = 0.1, max_retries: int = 3):
-        # No load_dotenv here anymore
+    # --- __init__ Method ---
+    # Accepts model name from config, assumes API key is globally set
+    def __init__(self, model: str = "gpt-4o-mini", temperature: float = 0.1):
+        """
+        Initializes the CommandGenerator.
+
+        Args:
+            model: The name of the OpenAI model to use (e.g., "gpt-4o-mini").
+                   This should be passed from the loaded configuration.
+            temperature: The sampling temperature for the LLM.
+        """
+        # API key is assumed to be set globally via openai.api_key = loaded_key in main.py
         self.model = model
         self.temperature = temperature
-        self.max_retries = max_retries # Max retries for API calls, not command execution
+        log.debug(f"CommandGenerator initialized with model: {self.model}, temperature: {self.temperature}")
 
+
+    # --- clean_json_response Method ---
+    # Remains unchanged
     def clean_json_response(self, response_str: str) -> str:
         """
         Cleans common markdown formatting issues around JSON responses from LLMs.
         Attempts to extract the outermost JSON object. Robustly handles variations.
         """
         if not isinstance(response_str, str):
-             logging.warning(f"clean_json_response received non-string input: {type(response_str)}")
+             log.warning(f"clean_json_response received non-string input: {type(response_str)}")
              return "" # Return empty string for non-string input
 
         response_str = response_str.strip()
@@ -74,7 +88,7 @@ COMMAND GENERATION RULES:
             response_str = response_str[start_index:end_index]
         except ValueError:
             # If no '{' or '}' found, it's likely not JSON.
-            logging.warning("Could not find JSON object boundaries '{...}' in LLM response after cleaning markdown.")
+            log.warning("Could not find JSON object boundaries '{...}' in LLM response after cleaning markdown.")
             # Let's check if it *might* be valid JSON without braces (unlikely for object)
             # but return the cleaned string for now, parsing will fail later if needed.
             return response_str # Return stripped string, parse attempt will clarify
@@ -84,48 +98,46 @@ COMMAND GENERATION RULES:
 
         return response_str
 
+
+    # --- generate_command Method ---
+    # Remains largely unchanged, but logs the model being used and uses self.model
     def generate_command(self, conversation_history: List[Dict[str, str]], system_context: Dict[str, str]) -> str:
         """
         Generates the FFmpeg command using the LLM, incorporating context and conversation history.
+        Uses the model specified during initialization and the globally configured API key.
         """
-        # Format the file context message for the system prompt
+        # --- Format File Context (remains the same) ---
         file_context_str = "\nFILE CONTEXT:\n"
         explicit_file = system_context.get("explicit_input_file")
         detected_files = system_context.get("detected_files_in_directory")
-        cwd = system_context.get("current_directory", ".") # Get CWD for context message
+        cwd = system_context.get("current_directory", ".")
 
         if explicit_file:
             file_context_str += f"- Explicit input file provided: '{explicit_file}' (Use this exact path)\n"
         if detected_files:
-            # Use relative paths if possible for brevity in prompt
             relative_files_for_prompt = []
             for f_abs in detected_files:
                  try:
                      rel_path = os.path.relpath(f_abs, cwd)
-                     # Prefer relative path if it's simpler and doesn't go up many levels
-                     if len(rel_path) < len(f_abs) and '../' not in rel_path[3:]: # Heuristic
+                     if len(rel_path) < len(f_abs) and '../' not in rel_path[3:]:
                          relative_files_for_prompt.append(rel_path)
                      else:
                          relative_files_for_prompt.append(f_abs)
-                 except ValueError: # Files on different drives (Windows)
+                 except ValueError:
                      relative_files_for_prompt.append(f_abs)
 
             files_list_str = ", ".join([f"'{f}'" for f in relative_files_for_prompt])
-            # Include CWD in message for clarity
             file_context_str += f"- Media files found in directory '{cwd}': {files_list_str}\n"
-            # Clarify that absolute paths should be used in commands if needed
             file_context_str += f"- Note: In the generated command, use full absolute paths for these files where necessary (e.g., '{detected_files[0]}' ...).\n"
 
-        # Add the summary message if it exists and provides unique info
         summary_msg = system_context.get("file_context_message","")
-        # Check if the summary is already covered by the explicit/detected file lines
         if summary_msg and not explicit_file and not detected_files:
              file_context_str += f"- Additional context: {summary_msg}\n"
         elif not explicit_file and not detected_files:
-             # Be explicit about CWD here too
              file_context_str += f"- No specific input file provided or common media files detected in the directory '{cwd}'.\n"
 
-        # Construct the final system prompt
+
+        # --- Construct System Prompt (remains the same) ---
         try:
             formatted_system_prompt = self.SYSTEM_PROMPT_TEMPLATE.format(
                 os_info=system_context.get('os_info', 'Unknown'),
@@ -133,41 +145,57 @@ COMMAND GENERATION RULES:
                 shell=system_context.get('shell', 'Unknown'),
                 ffmpeg_version=system_context.get('ffmpeg_version', 'Unknown'),
                 ffmpeg_executable_path=system_context.get('ffmpeg_executable_path', 'ffmpeg'),
-                current_directory=cwd, # Pass CWD here
+                current_directory=cwd,
                 file_context=file_context_str
             )
         except KeyError as e:
-             logging.error(f"Missing key in system_context for prompt formatting: {e}")
+             log.error(f"Missing key in system_context for prompt formatting: {e}")
              raise ValueError(f"System context dictionary is missing required key: {e}") from e
 
+        # --- Prepare Messages (remains the same) ---
         messages = [{"role": "system", "content": formatted_system_prompt}]
-        # Filter out empty user messages if any crept in
         valid_history = [msg for msg in conversation_history if msg.get("content")]
-        messages.extend(valid_history) # Add user prompts, assistant responses, errors etc.
+        messages.extend(valid_history)
 
-        logging.debug(f"Sending messages to LLM: {json.dumps(messages, indent=2)}")
+        log.debug(f"Sending messages to LLM (model: {self.model}): {json.dumps(messages, indent=2)}")
 
-        # Make the API call
+        # --- Make API Call (uses self.model, relies on global API key) ---
         try:
+            # NOTE: openai.api_key is used implicitly by the library if set globally
             response = openai.chat.completions.create(
-                model=self.model,
+                model=self.model, # Use the model name stored in self.model
                 messages=messages,
                 temperature=self.temperature,
                 response_format={"type": "json_object"} # Request JSON output
             )
             content = response.choices[0].message.content
-            logging.debug(f"LLM raw choice content: {content}")
-            # Check for potential refusals or empty content
+            log.debug(f"LLM raw choice content: {content}")
+
             if not content:
-                 logging.warning("LLM returned empty content.")
-                 # Return structure indicating failure
+                 log.warning("LLM returned empty content.")
+                 # Return structure indicating failure but parsable
                  return json.dumps({"explanation": ["LLM returned empty content."], "command": ""})
 
             return content
 
-        except openai.APIConnectionError as e: logging.error(f"OpenAI API connection error: {e}"); raise
-        except openai.RateLimitError as e: logging.error(f"OpenAI API rate limit exceeded: {e}"); raise
-        except openai.AuthenticationError as e: logging.error(f"OpenAI API authentication error (invalid key?): {e}"); raise
-        except openai.PermissionDeniedError as e: logging.error(f"OpenAI API permission denied error: {e}"); raise
-        except openai.APIStatusError as e: logging.error(f"OpenAI API status error: {e.status_code} - {e.response}"); raise
-        except Exception as e: logging.error(f"Error during OpenAI API call: {e}", exc_info=True); raise
+        # --- Error Handling (remains the same, includes specific OpenAI errors) ---
+        except openai.APIConnectionError as e:
+            log.error(f"OpenAI API connection error: {e}")
+            raise # Re-raise to be caught by the main loop in app.py
+        except openai.RateLimitError as e:
+            log.error(f"OpenAI API rate limit exceeded: {e}")
+            raise
+        except openai.AuthenticationError as e:
+            # This might indicate the globally set key is invalid
+            log.error(f"OpenAI API authentication error (invalid key?): {e}")
+            raise
+        except openai.PermissionDeniedError as e:
+            log.error(f"OpenAI API permission denied error: {e}")
+            raise
+        except openai.APIStatusError as e:
+            log.error(f"OpenAI API status error: {e.status_code} - {e.response}")
+            raise
+        except Exception as e:
+            # Catch any other unexpected errors during the API call
+            log.exception(f"Unexpected error during OpenAI API call:") # Use exception to log traceback
+            raise # Re-raise for handling in the main loop
